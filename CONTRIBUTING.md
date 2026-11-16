@@ -15,29 +15,29 @@ The owner can invite the other developer through GitHub Settings → Collaborato
 
 ## Each change
 
-Start with a current main and a short feature branch (the branch name below is an example):
+For this early prototype, work directly on `main`. Feature branches and pull requests are optional and should only be created by an agent when the user asks for them. Start with a current checkout:
 
 ```sh
 git switch main
 git pull --ff-only
-git switch -c mac/improve-session-controls
 ```
 
-Make a focused change, inspect `git diff`, run the relevant checks, then commit and push your branch:
+Make a focused change, inspect `git diff`, run the relevant checks, then commit and push:
 
 ```sh
 git add <files-you-changed>
 git commit -m "Describe the resulting change"
-git push -u origin HEAD
+git pull --rebase
+git push origin main
 ```
 
-Open a pull request on GitHub. Ask the other developer to review shared behaviour or contracts; merge when the relevant checks pass. Pull main before starting the next change. Use branches per feature, rather than permanent Mac and Windows branches, so both platforms remain together on main.
+Pull before starting the next change. If another developer has pushed while you were working, rebase your unpushed commits onto the updated main, resolve any conflicts carefully, and rerun relevant checks before pushing. Never force-push main. If a conflict changes product behaviour or overwrites the other contributor's work, agree on the resolution together.
 
-Avoid editing the same files at once. Put platform changes under the platform app and use an issue or draft PR to agree on changes to shared behaviour. If both developers change a contract, resolve that agreement before merging; separate branches alone do not prevent semantic conflicts.
+Avoid editing the same files at once. Put platform changes under the platform app and coordinate changes to shared behaviour with the other developer. If both developers change a contract, agree on it before pushing. Both native apps stay together on main.
 
-## Expectations for a pull request
+## Documenting a change
 
-Explain the user-visible change, platform affected and verification performed. If a shared rule changes, update docs/behaviour.md and matching scenarios or schemas in the same PR. Label proposed behaviour separately from implemented behaviour. A Windows implementation should document its own build/test commands when it lands.
+Explain the user-visible change, platform affected and verification performed. If a shared rule changes, update docs/behaviour.md and matching scenarios or schemas in the same change. Label proposed behaviour separately from implemented behaviour. A Windows implementation should document its own build/test commands when it lands.
 
 The common coding-agent instructions are AGENTS.md. CLAUDE.md imports that file. Keep personal agent settings and credentials local.
 
