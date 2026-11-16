@@ -187,9 +187,12 @@ import GatekeeperCore
         XCTAssertFalse(model.interventions.isEmpty)
     }
 
-    func testSupersededAppSwitchReplyIsDiscardedAndNewViewRemainsQueued() async {
+    func testAppSwitchToChangedContentWithholdsBlurAndQueuesNewView() async {
         client.reply = offTask()
-        client.beforeReply = { [unowned self] in self.model.contextChanged(.appSwitch) }
+        client.beforeReply = { [unowned self] in
+            self.pixel = 200
+            self.model.contextChanged(.appSwitch)
+        }
         await start()
         XCTAssertTrue(model.interventions.isEmpty)
         XCTAssertEqual(model.policy.pendingTrigger, .appSwitch)
@@ -471,6 +474,7 @@ import GatekeeperCore
     }
 
     func testSupersededInferenceIsInterruptedWithoutRestartingConnection() async {
+        trackedWindow = ScreenWindowContext(windowID: 10, processID: 77)
         client.holdResult = true; client.supportsInterrupt = true
         let started = expectation(description: "Old analysis running")
         client.onRequest = { started.fulfill() }
@@ -478,6 +482,8 @@ import GatekeeperCore
         await fulfillment(of: [started], timeout: 2)
         let oldTask = model.checkTask
         client.onRequest = nil
+        trackedWindow = ScreenWindowContext(windowID: 20, processID: 88)
+        model.pollWindowContexts = { [1: ScreenWindowContext(windowID: 20, processID: 88)] }
         model.contextChanged(.navigation)
         await model.priorityInterruptTask?.value
         await oldTask?.value
@@ -486,9 +492,75 @@ import GatekeeperCore
         XCTAssertNil(model.verdict)
         XCTAssertNil(model.error)
         client.holdResult = false; client.reply = offTask(); pixel = 200
-        clock.now += 3; model.tickSession(); await model.checkTask?.value
+        clock.now += 3; model.tickSession()
+        clock.now += 1; model.tickSession(); await model.checkTask?.value
         XCTAssertEqual(client.requests, 2)
         XCTAssertEqual(model.interventions.count, 1)
+    }
+
+    func testRepeatedTitleChangesKeepFirstInferenceAndPermitUnchangedOffTaskContent() async {
+        trackedWindow = ScreenWindowContext(windowID: 10, processID: 77, navigationToken: 1)
+        client.holdResult = true; client.supportsInterrupt = true; client.reply = offTask()
+        let started = expectation(description: "First inference")
+        client.onRequest = { started.fulfill() }
+        model.startSession(); await fulfillment(of: [started], timeout: 2)
+        for token in 2...12 {
+            trackedWindow = ScreenWindowContext(windowID: 10, processID: 77, navigationToken: token)
+            model.pollWindowContexts = { [unowned self] in [1: self.trackedWindow!] }
+            model.contextChanged(.navigation)
+            await model.priorityInterruptTask?.value
+        }
+        XCTAssertEqual(client.interrupts, 0)
+        client.completeHeldReply(); await model.checkTask?.value
+        XCTAssertEqual(client.requests, 1)
+        XCTAssertEqual(model.verdict?.status, "off_task")
+        XCTAssertEqual(model.interventions.map(\.id), [1])
+    }
+
+    func testChangedTabInSameWindowCannotReceiveOldBlur() async {
+        trackedWindow = ScreenWindowContext(windowID: 10, processID: 77, navigationToken: 1)
+        client.reply = offTask()
+        client.beforeReply = { [unowned self] in
+            self.trackedWindow = ScreenWindowContext(windowID: 10, processID: 77, navigationToken: 2)
+            self.pixel = 200
+            self.model.contextChanged(.navigation)
+        }
+        await start()
+        XCTAssertTrue(model.interventions.isEmpty)
+        XCTAssertNotNil(model.verdict)
+        XCTAssertEqual(model.policy.pendingTrigger, .navigation)
+    }
+
+    func testNavigationOnOtherMonitorPreservesUsableFirstResultPerScreen() async {
+        var contexts: [UInt32: ScreenWindowContext] = [
+            1: ScreenWindowContext(windowID: 10, processID: 77),
+            2: ScreenWindowContext(windowID: 20, processID: 88)]
+        model.pollWindowContexts = { contexts }
+        model.captureScreens = { [unowned self] in
+            try [UInt32(1), UInt32(2)].map { id in
+                let file = self.directory.appendingPathComponent("synthetic-\(UUID().uuidString).jpg")
+                try Data("synthetic".utf8).write(to: file)
+                let value: UInt8 = id == 2 && contexts[id]?.windowID == 30 ? 200 : 100
+                let fingerprint = ScreenFingerprint(displayID: id, sourceWidth: 1600, sourceHeight: 900,
+                    pixels: Array(repeating: value, count: 160 * 90))
+                return CapturedScreen(id: id, label: "Synthetic", image: NSImage(size: NSSize(width: 16, height: 9)),
+                    file: file, fingerprint: fingerprint, context: contexts[id])
+            }
+        }
+        client.supportsInterrupt = true
+        client.reply = Verdict(status: "off_task", reason: "Synthetic", nextStep: "Return",
+            screens: [ScreenVerdict(screenIndex: 1, status: "off_task", reason: "Synthetic feed"),
+                      ScreenVerdict(screenIndex: 2, status: "off_task", reason: "Synthetic feed")])
+        client.beforeReply = { [unowned self] in
+            contexts[2] = ScreenWindowContext(windowID: 30, processID: 99)
+            self.model.contextChanged(.appSwitch)
+        }
+        await start()
+        await model.priorityInterruptTask?.value
+        XCTAssertEqual(client.requests, 1)
+        XCTAssertEqual(client.interrupts, 0)
+        XCTAssertEqual(model.interventions.map(\.id), [1])
+        XCTAssertEqual(model.policy.pendingTrigger, .appSwitch)
     }
 
     func testSessionStartHasNoCountdownButOneOffStillDoes() async {
@@ -540,11 +612,14 @@ import GatekeeperCore
     }
 
     func testSpaceAndWindowNotificationBurstOnlyInterruptsOnce() async {
+        trackedWindow = ScreenWindowContext(windowID: 10, processID: 77)
         client.holdResult = true; client.supportsInterrupt = true
         let started = expectation(description: "Inference running")
         client.onRequest = { started.fulfill() }
         model.startSession(); await fulfillment(of: [started], timeout: 2)
         let old = model.checkTask
+        trackedWindow = ScreenWindowContext(windowID: 20, processID: 88)
+        model.pollWindowContexts = { [1: ScreenWindowContext(windowID: 20, processID: 88)] }
         model.contextChanged(.appSwitch)
         model.contextChanged(.navigation)
         model.contextChanged(.spaceChange)

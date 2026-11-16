@@ -122,8 +122,15 @@ public struct InterventionRules {
             guard let latest = current.first(where: { $0.displayID == evidence.displayID }) else { return nil }
             let next = followup.first { $0.displayID == evidence.displayID }
             let oldWindow = assessedContexts[evidence.displayID], newWindow = currentContexts[evidence.displayID]
-            let validView = oldWindow != nil || newWindow != nil ? oldWindow != nil && oldWindow == newWindow :
-                SceneFreshness.matches(evidence, current: latest, followup: next)
+            let validView: Bool
+            if let oldWindow, let newWindow {
+                let sameWindow = oldWindow.windowID == newWindow.windowID && oldWindow.processID == newWindow.processID
+                // Titles also change for progress/unread counts. They are a hint,
+                // not proof that the assessed content has been replaced.
+                validView = sameWindow && (oldWindow == newWindow || SceneFreshness.matches(evidence, current: latest, followup: next))
+            } else {
+                validView = oldWindow == nil && newWindow == nil && SceneFreshness.matches(evidence, current: latest, followup: next)
+            }
             guard validView,
                   !isApproved(latest, followup: next, context: newWindow, at: now) else { return nil }
             return InterventionCandidate(fingerprint: next ?? latest, screenIndex: screen.screenIndex, reason: screen.reason, context: newWindow)

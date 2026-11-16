@@ -73,6 +73,8 @@ import GatekeeperCore
     private var viewProbeTask: Task<Void, Never>?
     private(set) var priorityInterruptTask: Task<Void, Never>?
     private var viewProbeBaseline: [ScreenFingerprint]?
+    private var inFlightWindows: [UInt32: ScreenWindowContext] = [:]
+    private var inFlightScreenCount = 0
     private var sceneRevision = 0
     private var visualRevision = 0
     var prioritySettleDelay: () async throws -> Void = { try await Task.sleep(nanoseconds: 350_000_000) }
@@ -506,7 +508,9 @@ import GatekeeperCore
             var appName: String?
             defer {
                 Diagnostics.event("check_finished", trace: trace, details: "outcome=\(outcome)")
-                if activeAITrace?.id == trace.id { activeAITrace = nil }
+                if activeAITrace?.id == trace.id {
+                    activeAITrace = nil; inFlightWindows = [:]; inFlightScreenCount = 0
+                }
                 for file in imageFiles { try? FileManager.default.removeItem(at: file) }
                 temporaryImages.removeAll { imageFiles.contains($0) }
                 checking = false; analysisInFlight = false; countdown = nil; stage = ""; checkTask = nil
@@ -571,6 +575,8 @@ import GatekeeperCore
                 } else { requestTrigger = .manual }
                 displayCount = captures.count
                 stage = "Checking all screens against your goal…"; analysisInFlight = true
+                inFlightWindows = windowContexts(captures)
+                inFlightScreenCount = captures.count
                 activeAITrace = trace
                 if pendingSceneTrace?.id == trace.id { pendingSceneTrace = nil }
                 Diagnostics.event("ai_started", trace: trace, details: "trigger=\(requestTrigger?.rawValue ?? "unknown") screens=\(captures.count) model=\(model)")
@@ -580,11 +586,8 @@ import GatekeeperCore
                 try Task.checkCancellation()
                 if automatic {
                     guard sessionIsCurrent(sessionID) else { return }
-                    guard capturedScene == sceneRevision else {
-                        outcome = "superseded"
-                        Diagnostics.event("assessment_discarded", trace: trace, details: "reason=scene_changed")
-                        return
-                    }
+                    // A different monitor or title update cannot invalidate every
+                    // screen. Each off-task screen is checked against fresh evidence below.
                 }
                 // Publish a complete assessment together. Refreshes never clear the last result.
                 screenshots = captures; lastCheck = capturedAt; verdict = result
@@ -600,7 +603,7 @@ import GatekeeperCore
                     Diagnostics.event("freshness_started", trace: trace)
                     let candidates = try await currentInterventions(for: result, assessed: fingerprints,
                         assessedAt: capturedAt, capturedContext: capturedContext, assessedContexts: windowContexts(captures),
-                        assessedVisualRevision: capturedVisual)
+                        assessedVisualRevision: capturedVisual, assessedSceneRevision: capturedScene)
                     try Task.checkCancellation()
                     guard sessionIsCurrent(sessionID) else { return }
                     let newIDs = Set(candidates.map(\.id)).subtracting(interventions.map(\.id))
@@ -662,7 +665,7 @@ import GatekeeperCore
         }
     }
 
-    private func schedulePriorityInterrupt() {
+    private func schedulePriorityInterrupt(force: Bool = false) {
         guard analysisInFlight else { return }
         priorityInterruptTask?.cancel()
         let scheduleID = UUID(); interruptScheduleID = scheduleID
@@ -674,7 +677,17 @@ import GatekeeperCore
             }
             do { try await self.prioritySettleDelay() } catch { return }
             guard !Task.isCancelled, self.interruptScheduleID == scheduleID, self.analysisInFlight, self.session?.state == .running else { return }
+            let current = self.pollWindowContexts()
+            let allWindowsReplaced = self.inFlightScreenCount > 0 && self.inFlightWindows.count == self.inFlightScreenCount &&
+                self.inFlightWindows.allSatisfy { id, old in
+                    guard let latest = current[id] else { return false }
+                    return old.windowID != latest.windowID || old.processID != latest.processID
+                }
             let trace = self.activeAITrace
+            guard force || allWindowsReplaced else {
+                Diagnostics.event("inference_retained", trace: trace, details: "reason=assessed_window_still_present_or_identity_unknown")
+                return
+            }
             Diagnostics.event("interrupt_requested", trace: trace)
             let interrupted = await self.client.interruptAnalysis()
             Diagnostics.event("interrupt_finished", trace: trace, details: "accepted=\(interrupted)")
@@ -692,7 +705,7 @@ import GatekeeperCore
             sceneRevision += 1
             pendingSceneTrace = Diagnostics.Trace()
             Diagnostics.event("scene_detected", trace: pendingSceneTrace, details: "trigger=\(trigger.rawValue) scene_revision=\(sceneRevision)")
-            schedulePriorityInterrupt()
+            schedulePriorityInterrupt(force: trigger == .displayChange)
         }
         if interventionRules.invalidateChangedWindows(pollWindowContexts()) { correctionNote = nil }
         if trigger == .displayChange {
@@ -790,7 +803,7 @@ import GatekeeperCore
     }
 
     private func currentInterventions(for result: Verdict, assessed: [ScreenFingerprint], assessedAt: Date,
-                                     capturedContext: Int, assessedContexts: [UInt32: ScreenWindowContext], assessedVisualRevision: Int) async throws -> [InterventionCandidate] {
+                                     capturedContext: Int, assessedContexts: [UInt32: ScreenWindowContext], assessedVisualRevision: Int, assessedSceneRevision: Int) async throws -> [InterventionCandidate] {
         guard result.screens.contains(where: { $0.status == "off_task" }) else { return [] }
         guard capturedContext == contextRevision, currentTime().timeIntervalSince(assessedAt) <= 20 else {
             queueSessionCheck(.visualChange)
@@ -801,7 +814,7 @@ import GatekeeperCore
             return []
         }
         let samples = try await freshSceneSamples(against: assessed)
-        let verifyChangedPixels = assessedVisualRevision != visualRevision
+        let verifyChangedPixels = assessedVisualRevision != visualRevision || assessedSceneRevision != sceneRevision
         let candidates = interventionRules.candidates(verdict: result, assessed: assessed, current: samples.0,
             followup: samples.1, assessedAt: assessedAt, now: currentTime(), contextUnchanged: capturedContext == contextRevision,
             assessedContexts: assessedContexts, currentContexts: samples.2).filter { candidate in

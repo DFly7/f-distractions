@@ -128,3 +128,7 @@ open "dist/F Distractions.app" --args --capture-filter-smoke-test
 ```
 
 This briefly shows synthetic blue/red windows, captures locally and checks that the blue normal window is included while the red overlay is excluded. It deletes all capture files and does not send an AI request. The diagnostic log records pass/fail.
+
+### Avoiding inference starvation
+
+The 350 ms quiet-period debounce is capped at one second per queued burst. Window-title updates and navigation on another monitor queue priority checks without automatically restarting inference. Cancellation after settling requires all captured screens to have known, replaced window/process identities, or a display-arrangement change. Before a new blur, fresh per-screen evidence rejects replaced windows or changed stable content; unchanged monitors can use the completed result immediately. `inference_retained` records when a metadata event kept the current request running. A same-window title change needs matching stable pixels, so progress/unread titles do not invalidate an otherwise unchanged view.

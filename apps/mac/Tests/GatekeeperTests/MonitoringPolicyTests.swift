@@ -54,11 +54,24 @@ final class MonitoringPolicyTests: XCTestCase {
         var policy = MonitoringPolicy(minimumGap: 15)
         policy.beganRequest(at: now); policy.succeeded(with: [screen()])
         policy.queue(.appSwitch, at: now.addingTimeInterval(20))
-        policy.queue(.appSwitch, at: now.addingTimeInterval(21))
-        XCTAssertNil(policy.trigger(for: [screen()], at: now.addingTimeInterval(21.2)))
-        XCTAssertEqual(policy.trigger(for: [screen()], at: now.addingTimeInterval(21.4)), .appSwitch)
+        policy.queue(.appSwitch, at: now.addingTimeInterval(20.1))
+        XCTAssertNil(policy.trigger(for: [screen()], at: now.addingTimeInterval(20.3)))
+        XCTAssertEqual(policy.trigger(for: [screen()], at: now.addingTimeInterval(20.5)), .appSwitch)
         policy.beganRequest(at: now.addingTimeInterval(21.4))
         XCTAssertNil(policy.trigger(for: [screen(200)], at: now.addingTimeInterval(22)))
+    }
+
+    func testContinuousMetadataChangesCannotExtendSettlingIndefinitely() {
+        var policy = MonitoringPolicy(minimumGap: 15)
+        policy.beganRequest(at: now); policy.succeeded(with: [screen()])
+        for index in 0...8 {
+            policy.queue(.navigation, at: now.addingTimeInterval(5 + Double(index) * 0.2))
+        }
+        XCTAssertEqual(policy.trigger(for: [screen()], at: now.addingTimeInterval(6.6)), .navigation)
+        policy.beganRequest(at: now.addingTimeInterval(6.6))
+        policy.queue(.navigation, at: now.addingTimeInterval(10))
+        XCTAssertNil(policy.trigger(for: [screen()], at: now.addingTimeInterval(10.2)))
+        XCTAssertEqual(policy.trigger(for: [screen()], at: now.addingTimeInterval(10.4)), .navigation)
     }
 
     func testTabNavigationGetsPriorityOverBackgroundGap() {

@@ -83,6 +83,7 @@ public struct MonitoringPolicy {
     public private(set) var lastRequest: Date?
     public private(set) var pendingTrigger: CheckTrigger? = .initial
     private var settleUntil: Date?
+    private var settleStarted: Date?
     private var retryAfter: Date?
 
     public init(minimumGap: TimeInterval) { self.minimumGap = max(1, minimumGap) }
@@ -91,7 +92,11 @@ public struct MonitoringPolicy {
         let existingIsPriority = pendingTrigger == .spaceChange || pendingTrigger == .appSwitch || pendingTrigger == .navigation || pendingTrigger == .viewChange || pendingTrigger == .displayChange || pendingTrigger == .manual
         let incomingIsPriority = trigger == .spaceChange || trigger == .appSwitch || trigger == .navigation || trigger == .viewChange || trigger == .displayChange || trigger == .manual
         if (baseline != nil || pendingTrigger != .initial) && (!existingIsPriority || incomingIsPriority) { pendingTrigger = trigger }
-        if trigger == .spaceChange || trigger == .appSwitch || trigger == .navigation || trigger == .viewChange || trigger == .displayChange { settleUntil = now.addingTimeInterval(0.35) }
+        if trigger == .spaceChange || trigger == .appSwitch || trigger == .navigation || trigger == .viewChange || trigger == .displayChange {
+            if settleStarted == nil { settleStarted = now }
+            // Quiet-period debounce must not starve inference under title churn.
+            settleUntil = min(now.addingTimeInterval(0.35), settleStarted!.addingTimeInterval(1))
+        }
     }
 
     public func trigger(for screens: [ScreenFingerprint], at now: Date) -> CheckTrigger? {
@@ -103,7 +108,7 @@ public struct MonitoringPolicy {
     }
 
     public mutating func beganRequest(at now: Date) {
-        lastRequest = now; pendingTrigger = nil; settleUntil = nil; retryAfter = nil
+        lastRequest = now; pendingTrigger = nil; settleUntil = nil; settleStarted = nil; retryAfter = nil
     }
 
     public mutating func succeeded(with screens: [ScreenFingerprint]) { baseline = screens }
