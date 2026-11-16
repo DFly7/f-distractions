@@ -1,6 +1,6 @@
 # Working on F Distractions
 
-Read README.md, docs/behaviour.md, docs/architecture.md and CONTRIBUTING.md before changing product behaviour. Platform build instructions live with the app.
+Read README.md, docs/behaviour.md, docs/architecture.md and CONTRIBUTING.md before changing product behaviour. Platform build instructions live with the app. For the current AI/screen-analysis handoff, also read docs/ai-screen-handoff.md.
 
 - The existing app is in apps/mac/. Keep its Swift package, bundle ID `dev.gatekeeper.poc`, Gatekeeper executable name, storage locations and signing identity behaviour stable unless a task explicitly changes them.
 - Windows implementation, framework and build setup are owned by the Windows contributor. Do not scaffold or choose them as a side effect of Mac/shared work.

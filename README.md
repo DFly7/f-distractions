@@ -9,6 +9,7 @@ This repository grew out of AI Tutor. The working product today is a native **ma
 ## Start here
 
 - **Mac build, usage and diagnostics:** [apps/mac/README.md](apps/mac/README.md)
+- **AI/screen handoff for James and his agent:** [docs/ai-screen-handoff.md](docs/ai-screen-handoff.md)
 - **What the product should do:** [docs/behaviour.md](docs/behaviour.md)
 - **Why this structure:** [docs/architecture.md](docs/architecture.md)
 - **Working together with Git, Codex and Claude:** [CONTRIBUTING.md](CONTRIBUTING.md)
