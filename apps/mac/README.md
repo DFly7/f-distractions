@@ -43,7 +43,7 @@ Each model response must include exactly one indexed verdict for every captured 
 
 Before showing an overlay, Gatekeeper takes a fresh local sample. Results older than 20 seconds or from a changed display arrangement are withheld and queued for reassessment. Each screen tracks its visible app window and a transient hash of the window title. Scrolling within the same window no longer vetoes blur. A different window or title (for example a browser tab switch) invalidates the old judgment. If window metadata is unavailable, pixel comparisons and a second local sample provide a conservative fallback. These are heuristics: navigation that preserves a title may be missed.
 
-The card leads with **Why this screen was blurred** and a prominent per-screen reason; your goal is a smaller reminder beneath it. This describes the blur trigger, which remains locked until an explicit action even if later content changes.
+The card leads with your goal as the main headline, followed by a clearly labelled **Why this screen was blurred** panel with the per-screen reason. This describes the blur trigger, which remains locked until an explicit action even if later content changes.
 
 The blur grows inward from all four edges over 1.4 seconds. Its background is click-through; a separate card has the deliberate actions. Native panels stay above ordinary windows without activating Gatekeeper. Cmd-Tab and the menu bar remain available. The panels have no close button and Escape does not dismiss them.
 

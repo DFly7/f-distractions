@@ -133,7 +133,7 @@ struct FocusOverlayCard: View {
     let onRelevant: () -> Void
     let onBreak: () -> Void
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 10) {
                 FocusMark(size: 30)
                 Text("F DISTRACTIONS").font(.system(size: 10, weight: .bold)).tracking(1.6)
@@ -141,19 +141,20 @@ struct FocusOverlayCard: View {
                 Text("SCREEN \(screenIndex)").font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundStyle(FocusBrand.muted)
             }
-            VStack(alignment: .leading, spacing: 8) {
-                Label("WHY THIS SCREEN WAS BLURRED", systemImage: "eye.slash")
-                    .font(.system(size: 10, weight: .semibold)).tracking(0.8)
-                    .foregroundStyle(FocusBrand.accent)
-                Text(reason).font(.system(size: 23, weight: .semibold)).tracking(-0.5)
-                    .lineLimit(4).minimumScaleFactor(0.85).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Your focus").font(.system(size: 12, weight: .medium)).foregroundStyle(FocusBrand.muted)
+                Text(goal).font(.system(size: 25, weight: .semibold)).tracking(-0.7)
+                    .lineLimit(3).minimumScaleFactor(0.85).fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Your focus").font(.system(size: 11, weight: .semibold)).foregroundStyle(FocusBrand.muted)
-                Text(goal).font(.system(size: 13)).foregroundStyle(FocusBrand.muted)
-                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
-            }.padding(13).frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 8) {
+                Label("WHY THIS SCREEN WAS BLURRED", systemImage: "eye.slash")
+                    .font(.system(size: 10, weight: .semibold)).tracking(0.6)
+                    .foregroundStyle(FocusBrand.accent)
+                Text(reason).font(.system(size: 14, weight: .medium))
+                    .lineLimit(4).minimumScaleFactor(0.9).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
                 .background(FocusBrand.ink.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
             Spacer(minLength: 0)
             HStack(spacing: 10) {
@@ -169,7 +170,7 @@ struct FocusOverlayCard: View {
                 Spacer()
                 Button("Take a break", action: onBreak).buttonStyle(FocusButtonStyle(kind: .quiet))
             }
-        }.padding(30).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        }.padding(28).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .background(FocusBrand.canvas, in: RoundedRectangle(cornerRadius: 24))
             .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(.white.opacity(0.65)))
             .foregroundStyle(FocusBrand.ink).preferredColorScheme(.light)
