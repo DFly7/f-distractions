@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "F Distractions task brief",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "goal": {
+      "type": "string"
+    },
+    "allowed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "offTask": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "question": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "goal",
+    "allowed",
+    "offTask",
+    "question"
+  ]
+}

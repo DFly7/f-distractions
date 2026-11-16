@@ -1,0 +1,80 @@
+[
+  {
+    "name": "latched-navigation",
+    "given": "Screen 2 is blurred.",
+    "when": "Change its tab or window.",
+    "then": "Screen 2 remains blurred; a recheck may be queued."
+  },
+  {
+    "name": "latched-on-task",
+    "given": "Screen 2 is blurred.",
+    "when": "AI returns on_task for every screen.",
+    "then": "Screen 2 remains blurred."
+  },
+  {
+    "name": "latched-error",
+    "given": "Screen 2 is blurred.",
+    "when": "Capture or AI check fails.",
+    "then": "Error is shown; Screen 2 remains blurred and no new blur is created."
+  },
+  {
+    "name": "per-screen-return",
+    "given": "Screens 1 and 2 are blurred.",
+    "when": "Press Return to work on Screen 2.",
+    "then": "Only Screen 2 fades out over 450 ms; Screen 1 stays blurred."
+  },
+  {
+    "name": "return-grace",
+    "given": "Return to work just cleared Screen 2.",
+    "when": "An old AI result arrives within three seconds.",
+    "then": "Screen 2 stays clear during its grace period."
+  },
+  {
+    "name": "return-reblur",
+    "given": "Return to work cleared a recently confirmed off-task view.",
+    "when": "Three seconds pass and the view still matches the local cache.",
+    "then": "That screen can reblur without waiting for AI."
+  },
+  {
+    "name": "relevance-correction",
+    "given": "Screen 2 is blurred.",
+    "when": "Press This is relevant on Screen 2.",
+    "then": "Only Screen 2 clears and gets a view-scoped exception for up to two minutes."
+  },
+  {
+    "name": "hold-reset",
+    "given": "Session is running.",
+    "when": "Hold End for nine seconds, then release.",
+    "then": "Progress resets; session and monitoring continue."
+  },
+  {
+    "name": "hold-complete",
+    "given": "Session is running.",
+    "when": "Complete the continuous ten-second Take a break hold.",
+    "then": "Session pauses, timer freezes, captures stop and all blur clears."
+  },
+  {
+    "name": "stale-new-blur",
+    "given": "No blur on Screen 2.",
+    "when": "An off-task result arrives after the assessed window changed or is older than 20 seconds.",
+    "then": "Do not initiate blur from that stale result; queue reassessment."
+  },
+  {
+    "name": "display-disconnect",
+    "given": "Screens 1 and 2 are blurred.",
+    "when": "Disconnect Screen 2.",
+    "then": "Remove Screen 2 panels; Screen 1 remains blurred."
+  },
+  {
+    "name": "late-after-end",
+    "given": "AI request is in flight.",
+    "when": "Session ends, then the result arrives.",
+    "then": "Discard the result; monitoring and overlays stay stopped."
+  },
+  {
+    "name": "refresh-stability",
+    "given": "A completed assessment is visible.",
+    "when": "A new inference starts, fails or is cancelled.",
+    "then": "Keep the previous verdict, images and capture time together without collapsing the layout."
+  }
+]

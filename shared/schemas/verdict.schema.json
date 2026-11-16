@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "F Distractions screen assessment",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "on_task",
+        "off_task",
+        "unsure"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "nextStep": {
+      "type": "string"
+    },
+    "screens": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "screenIndex": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "on_task",
+              "off_task",
+              "unsure",
+              "neutral"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "screenIndex",
+          "status",
+          "reason"
+        ]
+      }
+    }
+  },
+  "required": [
+    "status",
+    "reason",
+    "nextStep",
+    "screens"
+  ]
+}

@@ -1,0 +1,212 @@
+[
+  {
+    "name": "work-and-wallpaper",
+    "screenCount": 2,
+    "valid": true,
+    "response": {
+      "status": "on_task",
+      "reason": "Synthetic example.",
+      "nextStep": "Continue your task.",
+      "screens": [
+        {
+          "screenIndex": 1,
+          "status": "on_task",
+          "reason": "Synthetic screen."
+        },
+        {
+          "screenIndex": 2,
+          "status": "neutral",
+          "reason": "Synthetic screen."
+        }
+      ]
+    }
+  },
+  {
+    "name": "distraction-on-second-screen",
+    "screenCount": 2,
+    "valid": true,
+    "response": {
+      "status": "off_task",
+      "reason": "Synthetic example.",
+      "nextStep": "Continue your task.",
+      "screens": [
+        {
+          "screenIndex": 1,
+          "status": "on_task",
+          "reason": "Synthetic screen."
+        },
+        {
+          "screenIndex": 2,
+          "status": "off_task",
+          "reason": "Synthetic screen."
+        }
+      ]
+    }
+  },
+  {
+    "name": "all-neutral",
+    "screenCount": 2,
+    "valid": true,
+    "response": {
+      "status": "unsure",
+      "reason": "Synthetic example.",
+      "nextStep": "Continue your task.",
+      "screens": [
+        {
+          "screenIndex": 1,
+          "status": "neutral",
+          "reason": "Synthetic screen."
+        },
+        {
+          "screenIndex": 2,
+          "status": "neutral",
+          "reason": "Synthetic screen."
+        }
+      ]
+    }
+  },
+  {
+    "name": "unreadable-with-work",
+    "screenCount": 2,
+    "valid": true,
+    "response": {
+      "status": "unsure",
+      "reason": "Synthetic example.",
+      "nextStep": "Continue your task.",
+      "screens": [
+        {
+          "screenIndex": 1,
+          "status": "on_task",
+          "reason": "Synthetic screen."
+        },
+        {
+          "screenIndex": 2,
+          "status": "unsure",
+          "reason": "Synthetic screen."
+        }
+      ]
+    }
+  },
+  {
+    "name": "off-task-overrides-unsure",
+    "screenCount": 2,
+    "valid": true,
+    "response": {
+      "status": "off_task",
+      "reason": "Synthetic example.",
+      "nextStep": "Continue your task.",
+      "screens": [
+        {
+          "screenIndex": 1,
+          "status": "unsure",
+          "reason": "Synthetic screen."
+        },
+        {
+          "screenIndex": 2,
+          "status": "off_task",
+          "reason": "Synthetic screen."
+        }
+      ]
+    }
+  },
+  {
+    "name": "missing-screen",
+    "screenCount": 2,
+    "valid": false,
+    "response": {
+      "status": "on_task",
+      "reason": "Synthetic example.",
+      "nextStep": "Continue your task.",
+      "screens": [
+        {
+          "screenIndex": 1,
+          "status": "on_task",
+          "reason": "Synthetic screen."
+        }
+      ]
+    }
+  },
+  {
+    "name": "duplicate-index",
+    "screenCount": 2,
+    "valid": false,
+    "response": {
+      "status": "on_task",
+      "reason": "Synthetic example.",
+      "nextStep": "Continue your task.",
+      "screens": [
+        {
+          "screenIndex": 1,
+          "status": "on_task",
+          "reason": "Synthetic screen."
+        },
+        {
+          "screenIndex": 1,
+          "status": "on_task",
+          "reason": "Synthetic screen."
+        }
+      ]
+    }
+  },
+  {
+    "name": "inconsistent-aggregate",
+    "screenCount": 2,
+    "valid": false,
+    "response": {
+      "status": "on_task",
+      "reason": "Synthetic example.",
+      "nextStep": "Continue your task.",
+      "screens": [
+        {
+          "screenIndex": 1,
+          "status": "on_task",
+          "reason": "Synthetic screen."
+        },
+        {
+          "screenIndex": 2,
+          "status": "off_task",
+          "reason": "Synthetic screen."
+        }
+      ]
+    }
+  },
+  {
+    "name": "out-of-range-index",
+    "screenCount": 2,
+    "valid": false,
+    "response": {
+      "status": "on_task",
+      "reason": "Synthetic example.",
+      "nextStep": "Continue your task.",
+      "screens": [
+        {
+          "screenIndex": 1,
+          "status": "on_task",
+          "reason": "Synthetic screen."
+        },
+        {
+          "screenIndex": 3,
+          "status": "on_task",
+          "reason": "Synthetic screen."
+        }
+      ]
+    }
+  },
+  {
+    "name": "unknown-status",
+    "screenCount": 1,
+    "valid": false,
+    "response": {
+      "status": "on_task",
+      "reason": "Synthetic example.",
+      "nextStep": "Continue your task.",
+      "screens": [
+        {
+          "screenIndex": 1,
+          "status": "unknown",
+          "reason": "Synthetic screen."
+        }
+      ]
+    }
+  }
+]

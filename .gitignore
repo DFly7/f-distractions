@@ -1,0 +1,28 @@
+# Build outputs and IDE state on either platform
+.DS_Store
+**/.build/
+**/dist/
+**/build/
+**/bin/
+**/obj/
+**/node_modules/
+**/.swiftpm/
+**/xcuserdata/
+.vs/
+.idea/
+*.user
+*.suo
+
+# Local credentials, signing material and runtime data
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.mobileprovision
+*.key
+*.pem
+*.log
+sessions.json
+.codex/
+.claude/settings.local.json
