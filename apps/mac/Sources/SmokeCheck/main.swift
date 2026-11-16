@@ -22,6 +22,24 @@ import GatekeeperCore
                 model = selected
             } else { model = models.first(where: \.isDefault) ?? models[0] }
             print("PASS: model catalogue loaded; selected \(model.id)")
+            if CommandLine.arguments.contains("--supporting-work-fixture") {
+                var files: [URL] = []
+                defer { for file in files { try? FileManager.default.removeItem(at: file) } }
+                let goal = "Work on the HCI chatbot coursework report, using AI and the project terminal. Unrelated dissertation work is outside this task."
+                for (name, messages, expected) in [
+                    ("HCI coursework", "User: Where is the report template for my chatbot coursework?\n\nAssistant: Locate template.tex in the assignment files and use it for the report.\n\nTerminal: coursework/README.md  chatbot.py  retrieval.py  report/template.tex", "on_task"),
+                    ("Template lookup", "User: Where is the template file?\n\nAssistant: Check the project templates folder and README for the document template location.", "not_off_task"),
+                    ("Dissertation", "User: Locate the template for my separate solar energy dissertation, not the HCI coursework.\n\nAssistant: Use the unrelated dissertation folder and energy-policy sources to prepare that thesis.", "off_task")
+                ] {
+                    let url = try conversationFixture(selected: name, messages: messages); files.append(url)
+                    let result = try await client.analyse(goal: goal, image: url, model: model.id)
+                    guard expected == "not_off_task" ? result.status != "off_task" : result.status == expected else {
+                        throw GatekeeperError("Supporting-work fixture expected \(expected), got \(result.status): \(result.reason)")
+                    }
+                    print("PASS: \(name) classified \(result.status): \(result.reason)")
+                }
+                client.stop(); return
+            }
             if CommandLine.arguments.contains("--interrupt-fixture") {
                 let url = try fixture("Coursework report\n\nEvaluate chatbot intent routing with labelled queries and a confusion matrix.")
                 defer { try? FileManager.default.removeItem(at: url) }

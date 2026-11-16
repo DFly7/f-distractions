@@ -482,6 +482,40 @@ import GatekeeperCore
         XCTAssertEqual(model.interventions.count, 1)
     }
 
+    func testSessionStartHasNoCountdownButOneOffStillDoes() async {
+        var waits = 0
+        model.countdownDelay = { waits += 1 }
+        await start()
+        XCTAssertEqual(waits, 0)
+        model.endSession()
+        model.check(); await model.checkTask?.value
+        XCTAssertEqual(waits, 3)
+    }
+
+    func testPixelOnlyChangesDoNotRestartInferenceOrBlurChangedContent() async {
+        trackedWindow = ScreenWindowContext(windowID: 10, processID: 77)
+        client.holdResult = true; client.supportsInterrupt = true; client.reply = offTask()
+        let started = expectation(description: "First check running")
+        client.onRequest = { started.fulfill() }
+        model.startSession()
+        await fulfillment(of: [started], timeout: 2)
+        client.onRequest = nil
+        pixel = 200
+        await model.probeForViewChange()
+        XCTAssertEqual(model.policy.pendingTrigger, .viewChange)
+        XCTAssertNil(model.priorityInterruptTask)
+        XCTAssertEqual(client.interrupts, 0)
+        client.completeHeldReply()
+        await model.checkTask?.value
+        XCTAssertEqual(client.requests, 1)
+        XCTAssertTrue(model.interventions.isEmpty)
+        XCTAssertNotNil(model.verdict) // Retained as a completed historical assessment.
+        client.holdResult = false
+        clock.now += 3; model.tickSession(); await model.checkTask?.value
+        XCTAssertEqual(client.requests, 2)
+        XCTAssertEqual(model.interventions.count, 1)
+    }
+
     private func offTask() -> Verdict {
         Verdict(status: "off_task", reason: "Unrelated feed", nextStep: "Return to work",
                 screens: [ScreenVerdict(screenIndex: 1, status: "off_task", reason: "Unrelated feed")])
@@ -540,6 +574,10 @@ import GatekeeperCore
     private func result() throws -> Verdict {
         if let reply { return reply }
         return try Verdict.decode("{\"status\":\"on_task\",\"reason\":\"Synthetic work\",\"nextStep\":\"Continue\"}")
+    }
+    func completeHeldReply() {
+        let continuation = held; held = nil
+        continuation?.resume(with: Result { try result() })
     }
     func interruptAnalysis() async -> Bool {
         guard supportsInterrupt, let continuation = held else { return false }

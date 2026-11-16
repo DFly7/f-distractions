@@ -74,6 +74,7 @@ import GatekeeperCore
     private(set) var priorityInterruptTask: Task<Void, Never>?
     private var viewProbeBaseline: [ScreenFingerprint]?
     private var sceneRevision = 0
+    private var visualRevision = 0
     var prioritySettleDelay: () async throws -> Void = { try await Task.sleep(nanoseconds: 350_000_000) }
     private var sessionDeadline: Date?
     private var lastSampleAt: Date?
@@ -356,7 +357,7 @@ import GatekeeperCore
                 }
             }
         }
-        beginCheck(automatic: true, withCountdown: true)
+        beginCheck(automatic: true, withCountdown: false)
     }
 
     func tickSession() {
@@ -488,6 +489,7 @@ import GatekeeperCore
                 appName = foregroundAppName()
                 let capturedContext = contextRevision
                 let capturedScene = sceneRevision
+                let capturedVisual = visualRevision
                 let capturedAt = currentTime()
                 let capturedApplication = NSWorkspace.shared.frontmostApplication
                 let captures = try await captureScreens()
@@ -542,7 +544,8 @@ import GatekeeperCore
                         lastOnTaskApplication = capturedApplication
                     }
                     let candidates = try await currentInterventions(for: result, assessed: fingerprints,
-                        assessedAt: capturedAt, capturedContext: capturedContext, assessedContexts: windowContexts(captures))
+                        assessedAt: capturedAt, capturedContext: capturedContext, assessedContexts: windowContexts(captures),
+                        assessedVisualRevision: capturedVisual)
                     try Task.checkCancellation()
                     guard sessionIsCurrent(sessionID) else { return }
                     let newIDs = Set(candidates.map(\.id)).subtracting(interventions.map(\.id))
@@ -608,7 +611,8 @@ import GatekeeperCore
     }
 
     func contextChanged(_ trigger: CheckTrigger) {
-        if trigger == .appSwitch || trigger == .navigation || trigger == .viewChange || trigger == .displayChange {
+        if trigger == .viewChange { visualRevision += 1 }
+        if trigger == .appSwitch || trigger == .navigation || trigger == .displayChange {
             sceneRevision += 1
             Diagnostics.record("Priority scene change detected: trigger=\(trigger.rawValue)")
             schedulePriorityInterrupt()
@@ -705,7 +709,7 @@ import GatekeeperCore
     }
 
     private func currentInterventions(for result: Verdict, assessed: [ScreenFingerprint], assessedAt: Date,
-                                     capturedContext: Int, assessedContexts: [UInt32: ScreenWindowContext]) async throws -> [InterventionCandidate] {
+                                     capturedContext: Int, assessedContexts: [UInt32: ScreenWindowContext], assessedVisualRevision: Int) async throws -> [InterventionCandidate] {
         guard result.screens.contains(where: { $0.status == "off_task" }) else { return [] }
         guard capturedContext == contextRevision, currentTime().timeIntervalSince(assessedAt) <= 20 else {
             queueSessionCheck(.visualChange)
@@ -716,10 +720,16 @@ import GatekeeperCore
             return []
         }
         let samples = try await freshSceneSamples(against: assessed)
+        let verifyChangedPixels = assessedVisualRevision != visualRevision
         let candidates = interventionRules.candidates(verdict: result, assessed: assessed, current: samples.0,
             followup: samples.1, assessedAt: assessedAt, now: currentTime(), contextUnchanged: capturedContext == contextRevision,
-            assessedContexts: assessedContexts, currentContexts: samples.2).filter {
-                assessedAt >= returnDeadlines[$0.id, default: .distantPast]
+            assessedContexts: assessedContexts, currentContexts: samples.2).filter { candidate in
+                guard assessedAt >= returnDeadlines[candidate.id, default: .distantPast] else { return false }
+                guard verifyChangedPixels else { return true }
+                guard let evidence = assessed.first(where: { $0.displayID == candidate.id }),
+                      let current = samples.0.first(where: { $0.displayID == candidate.id }) else { return false }
+                return SceneFreshness.matches(evidence, current: current,
+                    followup: samples.1.first { $0.displayID == candidate.id })
             }
         var withheld: [String] = []
         for screen in result.screens where screen.status == "off_task" && !candidates.contains(where: { $0.screenIndex == screen.screenIndex }) {
@@ -730,6 +740,7 @@ import GatekeeperCore
             let reason = latest == nil ? "display unavailable" :
                 interventionRules.isApproved(latest!, followup: following, context: samples.2[id], at: currentTime()) ? "view approved by you" :
                 capturedContext != contextRevision ? "display arrangement changed" :
+                verifyChangedPixels ? "the visible content changed during analysis" :
                 assessedContexts[id] != nil ? "the visible app window changed" : "content changed and no window identity was available"
             withheld.append("Screen \(screen.screenIndex): \(reason)")
         }

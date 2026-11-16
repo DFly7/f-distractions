@@ -133,14 +133,32 @@
   },
   {
     "name": "superseded-inference",
-    "given": "One AI request is in flight and a newer app/tab/view appears.",
+    "given": "One AI request is in flight and a newer app/window/title is detected.",
     "when": "The newer scene settles.",
-    "then": "Cancel the superseded turn on the existing connection if supported, discard obsolete results, and assess the latest view without overlapping requests. Keep locked blur and the previous completed result."
+    "then": "Cancel that superseded turn on the existing connection if supported. Pixel-only view changes queue priority work without cancelling; verify old pixels before allowing a new blur."
   },
   {
     "name": "video-does-not-thrash-inference",
     "given": "A playing video changes pixels while its stable page region remains unchanged.",
     "when": "Local visual probes run during AI analysis.",
     "then": "Do not repeatedly cancel requests just for moving video pixels."
+  },
+  {
+    "name": "immediate-session-start",
+    "given": "A valid task is ready and screen access is granted.",
+    "when": "Start the session.",
+    "then": "Begin the first check immediately without a three-second countdown; keep the main window open."
+  },
+  {
+    "name": "coursework-supporting-template",
+    "given": "The goal is coursework; project files and an AI conversation about locating the assignment template are visible.",
+    "when": "Assess the screens.",
+    "then": "on_task when this is a supporting coursework step. If the connection is unclear, unsure; do not infer unrelated activity solely because the messages discuss a template."
+  },
+  {
+    "name": "incidental-pixel-update-during-first-check",
+    "given": "The first request is running.",
+    "when": "A settled pixel-only update occurs without app/window/title navigation.",
+    "then": "Do not cancel and restart the request. Queue the next view, and apply no new blur unless fresh samples still match the assessed content."
   }
 ]
