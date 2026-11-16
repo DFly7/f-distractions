@@ -36,7 +36,7 @@ import GatekeeperCore
     @Published private(set) var interventions: [InterventionCandidate] = []
     @Published private(set) var correctionNote: String?
     @Published private(set) var interventionNote: String?
-    var onInterventionsChanged: (([InterventionCandidate]) -> Void)?
+    var onInterventionsChanged: (([InterventionCandidate], Diagnostics.Trace?) -> Void)?
     var onSessionExitRequested: ((SessionExitAction, @escaping (Bool) -> Void) -> Void)?
     private var exitRequestID: UUID?
 
@@ -138,7 +138,9 @@ import GatekeeperCore
             }
         } catch { historyError = "Couldn’t load session history: \(error.localizedDescription)" }
         let client = self.client
-        client.onDiagnostic = { Diagnostics.record($0) }
+        client.onDiagnostic = { [weak self] message in
+            Diagnostics.event("provider", trace: self?.activeAITrace, details: message)
+        }
         displayObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -289,10 +291,19 @@ import GatekeeperCore
         Dictionary(uniqueKeysWithValues: captures.compactMap { capture in capture.context.map { (capture.id, $0) } })
     }
 
+    private var pendingSceneTrace: Diagnostics.Trace?
+    private var activeAITrace: Diagnostics.Trace?
+    private var lastProbeFailureAt: Date?
+
     private func scheduleCachedCheck() {
         cachedCheckTask?.cancel()
-        guard session?.state == .running, interventionRules.hasRecentViews(at: currentTime()) else { return }
+        guard session?.state == .running else { return }
+        guard interventionRules.hasRecentViews(at: currentTime()) else {
+            Diagnostics.event("cache_unavailable", trace: pendingSceneTrace, details: "reason=no_recent_views")
+            return
+        }
         let id = session?.id, revision = contextRevision
+        let trace = pendingSceneTrace ?? Diagnostics.Trace()
         cachedCheckTask = Task {
             var files: [URL] = []
             defer {
@@ -303,6 +314,7 @@ import GatekeeperCore
                 try await cacheCheckDelay()
                 try Task.checkCancellation()
                 guard sessionIsCurrent(id) else { return }
+                Diagnostics.event("cache_lookup_started", trace: trace)
                 let captures = try await captureScreens()
                 files = captures.map(\.file); temporaryImages += files
                 try Task.checkCancellation()
@@ -314,7 +326,10 @@ import GatekeeperCore
                     return false
                 }
                 var recalled = interventionRules.recalled(current: captures.map(\.fingerprint), contexts: contexts, at: currentTime())
-                if recalled.isEmpty, interventionRules.hasMatchingContext(contexts, at: currentTime()) {
+                var usedMotionComparison = false
+                let matchingContext = interventionRules.hasMatchingContext(contexts, at: currentTime())
+                if recalled.isEmpty, matchingContext {
+                    usedMotionComparison = true
                     try await freshnessDelay()
                     let next = try await captureScreens()
                     files += next.map(\.file); temporaryImages += next.map(\.file)
@@ -329,11 +344,14 @@ import GatekeeperCore
                 let recalledIDs = Set(recalled.map(\.id))
                 retained.removeAll { recalledIDs.contains($0.id) }
                 let newIDs = recalledIDs.subtracting(interventions.map(\.id))
-                setInterventions(retained + recalled)
+                Diagnostics.event("cache_lookup_finished", trace: trace, details: "hits=\(recalled.count) new_blurs=\(newIDs.count) motion_comparison=\(usedMotionComparison) matching_context=\(matchingContext)")
+                setInterventions(retained + recalled, trace: trace)
                 if !newIDs.isEmpty {
                     recordEvent(kind: "intervention", trigger: .appSwitch, reason: "Immediately blurred a recently confirmed off-task view from the local cache.")
                 }
-            } catch { /* A cache miss/failure never creates an off-task judgment. */ }
+            } catch {
+                Diagnostics.event(error is CancellationError ? "cache_cancelled" : "cache_failed", trace: trace)
+            }
         }
     }
 
@@ -343,6 +361,8 @@ import GatekeeperCore
         if !screenAccess { requestScreenAccess() }
         guard screenAccess else { error = "Allow screen access before starting a focus session."; return }
         let now = currentTime()
+        pendingSceneTrace = Diagnostics.Trace()
+        Diagnostics.event("session_started", trace: pendingSceneTrace)
         session = FocusSession(goal: goal.trimmingCharacters(in: .whitespacesAndNewlines), startedAt: now,
                                durationSeconds: sessionMinutes * 60, remainingSeconds: sessionMinutes * 60)
         session?.taskContext = taskContext
@@ -416,6 +436,9 @@ import GatekeeperCore
     func queueSessionCheck(_ trigger: CheckTrigger) {
         guard session?.state == .running else { return }
         policy.queue(trigger, at: currentTime())
+        if pendingSceneTrace == nil { pendingSceneTrace = Diagnostics.Trace() }
+        let waitMS = max(0, Int((policy.nextAllowedRequest?.timeIntervalSince(currentTime()) ?? 0) * 1000))
+        Diagnostics.event("check_queued", trace: pendingSceneTrace, details: "trigger=\(trigger.rawValue) in_flight=\(analysisInFlight) connecting=\(connecting) signing_in=\(signingIn) cooldown_ms=\(waitMS)")
     }
 
     func pauseSession(reason: String = "Paused by you. No captures or AI requests until resumed.") {
@@ -475,11 +498,15 @@ import GatekeeperCore
         checking = true; error = nil
         UserDefaults.standard.set(automatic ? (session?.goal ?? goal) : goal, forKey: "goal")
         UserDefaults.standard.set(model, forKey: "model")
+        let trace = pendingSceneTrace ?? Diagnostics.Trace()
         checkTask = Task {
+            var outcome = "abandoned"
             var imageFiles: [URL] = []
             var requestTrigger: CheckTrigger?
             var appName: String?
             defer {
+                Diagnostics.event("check_finished", trace: trace, details: "outcome=\(outcome)")
+                if activeAITrace?.id == trace.id { activeAITrace = nil }
                 for file in imageFiles { try? FileManager.default.removeItem(at: file) }
                 temporaryImages.removeAll { imageFiles.contains($0) }
                 checking = false; analysisInFlight = false; countdown = nil; stage = ""; checkTask = nil
@@ -511,7 +538,10 @@ import GatekeeperCore
                 let capturedVisual = visualRevision
                 let capturedAt = currentTime()
                 let capturedApplication = NSWorkspace.shared.frontmostApplication
+                let captureStart = ProcessInfo.processInfo.systemUptime
+                Diagnostics.event("capture_started", trace: trace)
                 let captures = try await captureScreens()
+                Diagnostics.event("capture_finished", trace: trace, details: "duration_ms=\(Int((ProcessInfo.processInfo.systemUptime - captureStart) * 1000)) screens=\(captures.count)")
                 imageFiles = captures.map(\.file)
                 temporaryImages = imageFiles
                 try Task.checkCancellation()
@@ -530,6 +560,7 @@ import GatekeeperCore
                     }
                     guard let trigger = policy.trigger(for: fingerprints, at: currentTime()) else {
                         session?.skippedSamples += 1
+                        outcome = "local_skip"
                         return
                     }
                     requestTrigger = trigger
@@ -540,14 +571,18 @@ import GatekeeperCore
                 } else { requestTrigger = .manual }
                 displayCount = captures.count
                 stage = "Checking all screens against your goal…"; analysisInFlight = true
-                Diagnostics.record("AI check started: trigger=\(requestTrigger?.rawValue ?? "unknown") screens=\(captures.count)")
+                activeAITrace = trace
+                if pendingSceneTrace?.id == trace.id { pendingSceneTrace = nil }
+                Diagnostics.event("ai_started", trace: trace, details: "trigger=\(requestTrigger?.rawValue ?? "unknown") screens=\(captures.count) model=\(model)")
                 if !automatic { showWindow?() }
                 let result = try await client.analyse(goal: taskGoal, images: imageFiles, model: model)
+                Diagnostics.event("ai_reply_received", trace: trace, details: "status=\(result.status)")
                 try Task.checkCancellation()
                 if automatic {
                     guard sessionIsCurrent(sessionID) else { return }
                     guard capturedScene == sceneRevision else {
-                        Diagnostics.record("Superseded assessment discarded; latest view queued")
+                        outcome = "superseded"
+                        Diagnostics.event("assessment_discarded", trace: trace, details: "reason=scene_changed")
                         return
                     }
                 }
@@ -562,23 +597,27 @@ import GatekeeperCore
                        capturedApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
                         lastOnTaskApplication = capturedApplication
                     }
+                    Diagnostics.event("freshness_started", trace: trace)
                     let candidates = try await currentInterventions(for: result, assessed: fingerprints,
                         assessedAt: capturedAt, capturedContext: capturedContext, assessedContexts: windowContexts(captures),
                         assessedVisualRevision: capturedVisual)
                     try Task.checkCancellation()
                     guard sessionIsCurrent(sessionID) else { return }
                     let newIDs = Set(candidates.map(\.id)).subtracting(interventions.map(\.id))
-                    setInterventions(candidates)
+                    Diagnostics.event("freshness_finished", trace: trace, details: "eligible_blurs=\(candidates.count)")
+                    setInterventions(candidates, trace: trace)
                     interventionRules.remember(candidates, at: currentTime())
                     if !newIDs.isEmpty {
                         recordEvent(kind: "intervention", reason: "A gradual blur was applied to \(newIDs.count) screen(s) after a fresh off-task judgment.")
                     }
                 }
-                Diagnostics.record("Analysis completed: status=\(result.status)")
+                outcome = "completed"
+                Diagnostics.event("assessment_completed", trace: trace, details: "status=\(result.status)")
             } catch {
+                outcome = Task.isCancelled || error is CancellationError ? "cancelled" : "failed"
                 if !Task.isCancelled && !(error is CancellationError) {
                     self.error = error.localizedDescription
-                    Diagnostics.failure("Screen check", error)
+                    Diagnostics.failure("Screen check", error, trace: trace)
                     if automatic && sessionIsCurrent(sessionID) {
                         setInterventions([])
                         policy.failed(at: currentTime())
@@ -614,7 +653,13 @@ import GatekeeperCore
                 contextChanged(.viewChange)
                 Diagnostics.record("Settled visual view change queued for priority assessment")
             }
-        } catch { /* Probing cannot classify content or create an error verdict. */ }
+        } catch {
+            if !Task.isCancelled && !(error is CancellationError),
+               lastProbeFailureAt == nil || currentTime().timeIntervalSince(lastProbeFailureAt!) >= 30 {
+                lastProbeFailureAt = currentTime()
+                Diagnostics.failure("visual_probe", error)
+            }
+        }
     }
 
     private func schedulePriorityInterrupt() {
@@ -629,15 +674,24 @@ import GatekeeperCore
             }
             do { try await self.prioritySettleDelay() } catch { return }
             guard !Task.isCancelled, self.interruptScheduleID == scheduleID, self.analysisInFlight, self.session?.state == .running else { return }
-            if await self.client.interruptAnalysis() { task?.cancel() }
+            let trace = self.activeAITrace
+            Diagnostics.event("interrupt_requested", trace: trace)
+            let interrupted = await self.client.interruptAnalysis()
+            Diagnostics.event("interrupt_finished", trace: trace, details: "accepted=\(interrupted)")
+            if interrupted { task?.cancel() }
         }
     }
 
     func contextChanged(_ trigger: CheckTrigger) {
-        if trigger == .viewChange { visualRevision += 1 }
+        if trigger == .viewChange {
+            visualRevision += 1
+            pendingSceneTrace = Diagnostics.Trace()
+            Diagnostics.event("scene_detected", trace: pendingSceneTrace, details: "trigger=\(trigger.rawValue) visual_revision=\(visualRevision)")
+        }
         if trigger == .spaceChange || trigger == .appSwitch || trigger == .navigation || trigger == .displayChange {
             sceneRevision += 1
-            Diagnostics.record("Priority scene change detected: trigger=\(trigger.rawValue)")
+            pendingSceneTrace = Diagnostics.Trace()
+            Diagnostics.event("scene_detected", trace: pendingSceneTrace, details: "trigger=\(trigger.rawValue) scene_revision=\(sceneRevision)")
             schedulePriorityInterrupt()
         }
         if interventionRules.invalidateChangedWindows(pollWindowContexts()) { correctionNote = nil }
@@ -656,6 +710,7 @@ import GatekeeperCore
 
     func returnToWork(displayID: UInt32) {
         guard interventions.contains(where: { $0.id == displayID }), session?.state == .running else { return }
+        Diagnostics.event("return_to_work", details: "display=\(displayID) grace_ms=3000")
         returnDeadlines[displayID] = currentTime().addingTimeInterval(3)
         pendingReturns.insert(displayID)
         cachedCheckTask?.cancel()
@@ -666,6 +721,7 @@ import GatekeeperCore
 
     func markRelevant(displayID: UInt32) {
         guard let candidate = interventions.first(where: { $0.id == displayID }), session?.state == .running else { return }
+        Diagnostics.event("relevance_correction", details: "display=\(displayID)")
         let latest = screenshots.first { $0.id == displayID && $0.context == candidate.context }
         interventionRules.approve(latest?.fingerprint ?? candidate.fingerprint, context: latest?.context ?? candidate.context, at: currentTime())
         setInterventions(interventions.filter { $0.id != displayID }, allowRemoval: true)
@@ -675,7 +731,7 @@ import GatekeeperCore
 
     func takeBreak() { requestSessionExit(.pause) }
 
-    private func setInterventions(_ candidates: [InterventionCandidate], allowRemoval: Bool = false) {
+    private func setInterventions(_ candidates: [InterventionCandidate], allowRemoval: Bool = false, trace: Diagnostics.Trace? = nil) {
         // Interventions latch until an explicit action. Background samples, AI
         // verdicts and errors can add/update a blur, but cannot silently lift it.
         var byDisplay = Dictionary(uniqueKeysWithValues: (allowRemoval ? [] : interventions).map { ($0.id, $0) })
@@ -684,9 +740,11 @@ import GatekeeperCore
             .sorted { $0.screenIndex < $1.screenIndex }
         interventionNote = next.isEmpty ? nil : "\(next.count) screen(s) locked. Use Return to work or This is relevant to lift the blur."
         guard next != interventions else { return }
+        let added = Set(next.map(\.id)).subtracting(interventions.map(\.id))
+        for id in added { Diagnostics.event("blur_requested", trace: trace, details: "display=\(id)") }
         interventions = next
         if !next.isEmpty { correctionNote = nil }
-        onInterventionsChanged?(next)
+        onInterventionsChanged?(next, trace)
         Diagnostics.record("Focus overlays updated: screens=\(next.count)")
     }
 
@@ -738,7 +796,7 @@ import GatekeeperCore
             queueSessionCheck(.visualChange)
             let reason = capturedContext != contextRevision ? "The display arrangement changed during analysis." : "The assessment was older than 20 seconds."
             recordEvent(kind: "rechecking", reason: reason + " Blur was withheld and a fresh check queued.")
-            Diagnostics.record("Blur withheld: \(capturedContext != contextRevision ? "display_change" : "result_age")")
+            Diagnostics.event("blur_withheld", trace: activeAITrace, details: "reason=\(capturedContext != contextRevision ? "display_change" : "result_age")")
             interventionNote = reason + " Rechecking before applying a blur."
             return []
         }
@@ -769,7 +827,7 @@ import GatekeeperCore
         }
         if !withheld.isEmpty {
             let description = withheld.joined(separator: "; ")
-            Diagnostics.record("Blur withheld: \(description)")
+            Diagnostics.event("blur_withheld", trace: activeAITrace, details: description)
             recordEvent(kind: "rechecking", reason: "Blur withheld. " + description + ".")
             interventionNote = "Blur withheld. " + description + "."
         }
@@ -904,5 +962,6 @@ import GatekeeperCore
         for file in temporaryImages { try? FileManager.default.removeItem(at: file) }
         temporaryImages = []
         ScreenCapture.cleanupTemporaryCaptures()
+        Diagnostics.flush()
     }
 }

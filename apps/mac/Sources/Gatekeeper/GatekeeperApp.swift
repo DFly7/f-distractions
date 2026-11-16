@@ -32,9 +32,9 @@ import GatekeeperCore
         window.center()
         ScreenCapture.overlayWindowIDs = { [weak self] in self?.overlays.captureExcludedWindowIDs ?? [] }
         model.showWindow = { [weak self] in self?.show() }
-        model.onInterventionsChanged = { [weak self] candidates in
+        model.onInterventionsChanged = { [weak self] candidates, trace in
             guard let self else { return }
-            self.overlays.update(candidates, goal: self.model.session?.goal ?? self.model.goal)
+            self.overlays.update(candidates, goal: self.model.session?.goal ?? self.model.goal, trace: trace)
             if NSApp.isActive {
                 self.window.level = candidates.isEmpty ? .normal : NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 2)
             }

@@ -302,6 +302,9 @@ import GatekeeperCore
     }
 
     func testReturningToKnownOffTaskViewBlursFromCacheWithoutAnAIRequest() async {
+        var entries: [String] = []
+        Diagnostics.onRecord = { entries.append($0) }
+        defer { Diagnostics.onRecord = nil }
         trackedWindow = ScreenWindowContext(windowID: 10, processID: 77)
         client.reply = offTask()
         await start()
@@ -313,6 +316,12 @@ import GatekeeperCore
         clock.now += 3
         trackedWindow = ScreenWindowContext(windowID: 10, processID: 77); pixel = 100
         model.contextChanged(.appSwitch); await model.cachedCheckTask?.value
+        XCTAssertTrue(entries.contains { $0.contains("event=cache_lookup_finished") && $0.contains("hits=0") })
+        let hit = entries.last { $0.contains("event=cache_lookup_finished") && $0.contains("hits=1") }
+        XCTAssertNotNil(hit)
+        let hitTrace = hit?.split(separator: " ").first { $0.hasPrefix("trace=") }.map(String.init)
+        XCTAssertNotNil(hitTrace)
+        XCTAssertTrue(entries.contains { $0.contains("event=blur_requested") && $0.contains(hitTrace ?? "missing") })
         XCTAssertEqual(model.interventions.count, 1)
         XCTAssertEqual(client.requests, 1)
     }
@@ -555,6 +564,30 @@ import GatekeeperCore
         }
         XCTAssertEqual(model.policy.pendingTrigger, .spaceChange)
         XCTAssertEqual(client.requests, 1)
+    }
+
+    func testDiagnosticsConnectSessionCaptureAssessmentAndBlurWithoutTaskText() async throws {
+        var entries: [String] = []
+        Diagnostics.onRecord = { entries.append($0) }
+        defer { Diagnostics.onRecord = nil }
+        client.reply = offTask()
+        await start()
+        let phases = ["session_started", "capture_started", "capture_finished", "ai_started",
+                      "ai_reply_received", "freshness_started", "freshness_finished", "blur_requested",
+                      "assessment_completed", "check_finished"]
+        var traceIDs: Set<String> = []
+        for phase in phases {
+            let row = try XCTUnwrap(entries.first { $0.hasPrefix("event=\(phase) ") }, phase)
+            let trace = try XCTUnwrap(row.split(separator: " ").first { $0.hasPrefix("trace=") }, phase)
+            traceIDs.insert(String(trace))
+            XCTAssertTrue(row.contains("elapsed_ms="), phase)
+        }
+        XCTAssertEqual(traceIDs.count, 1)
+        let log = entries.joined(separator: "\n")
+        XCTAssertFalse(log.contains(model.goal))
+        XCTAssertFalse(log.contains(model.taskContext))
+        XCTAssertFalse(log.contains("Unrelated feed"))
+        XCTAssertFalse(log.contains("Test Editor"))
     }
 
     private func offTask() -> Verdict {

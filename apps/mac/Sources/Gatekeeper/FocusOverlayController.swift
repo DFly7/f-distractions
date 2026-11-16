@@ -24,7 +24,7 @@ import GatekeeperCore
 
     init(presentsWindows: Bool = true) { self.presentsWindows = presentsWindows }
 
-    func update(_ candidates: [InterventionCandidate], goal: String, fadeDuration: TimeInterval = 1.4) {
+    func update(_ candidates: [InterventionCandidate], goal: String, fadeDuration: TimeInterval = 1.4, trace: Diagnostics.Trace? = nil) {
         let wanted = Set(candidates.map(\.id))
         for id in Set(panels.keys).subtracting(wanted) { remove(id) }
         for candidate in candidates {
@@ -72,9 +72,15 @@ import GatekeeperCore
             if presentsWindows {
                 blur.alphaValue = 1; card.alphaValue = 0
                 blur.orderFrontRegardless(); card.orderFrontRegardless()
+                Diagnostics.event("blur_presented", trace: trace, details: "display=\(id) fade_ms=\(Int(fadeDuration * 1000))")
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = fadeDuration
                     for (index, band) in bands.enumerated() { band.animator().frame = ends[index] }
+                } completionHandler: { [weak self, weak blur] in
+                    Task { @MainActor in
+                        guard let self, let blur, self.panels[id]?.blur === blur else { return }
+                        Diagnostics.event("blur_fade_completed", trace: trace, details: "display=\(id)")
+                    }
                 }
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = 0.4
@@ -85,6 +91,7 @@ import GatekeeperCore
     }
 
     func animateOut(displayID: UInt32) {
+        Diagnostics.event("blur_dismissal_started", details: "display=\(displayID) fade_ms=450")
         let outgoing = panels.removeValue(forKey: displayID).map { [$0] } ?? []
         for entry in outgoing {
             let id = UUID()
@@ -109,6 +116,7 @@ import GatekeeperCore
     }
     private func remove(_ id: UInt32) {
         guard let entry = panels.removeValue(forKey: id) else { return }
+        Diagnostics.event("blur_removed", details: "display=\(id)")
         entry.blur.orderOut(nil); entry.card.orderOut(nil)
         entry.blur.close(); entry.card.close()
     }
