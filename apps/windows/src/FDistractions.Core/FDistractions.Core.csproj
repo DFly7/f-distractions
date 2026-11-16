@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The same classifier instructions as the Mac app (shared/prompts/classify.txt is the reference copy). -->
+    <EmbeddedResource Include="..\..\..\..\shared\prompts\classify.txt" Link="classify.txt" LogicalName="FDistractions.Core.classify.txt" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,20 @@
+# Windows-specific additions to the repo-wide .gitignore (which already ignores bin/, obj/, .vs/, *.user, .env, *.log, *.pfx).
+
+# Test and build output
+**/TestResults/
+*.binlog
+publish/
+*.msix
+*.appx
+
+# Never commit screenshots, captures or personal session data
+captures/
+screenshots/
+*.jpg
+*.jpeg
+*.bmp
+sessions*.json
+
+# Local tooling settings
+.vscode/settings.json
+launchSettings.json

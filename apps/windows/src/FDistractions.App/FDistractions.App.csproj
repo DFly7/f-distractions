@@ -1,0 +1,27 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <!-- WPF and WinForms both define Application, MessageBox etc., so usings are explicit. -->
+    <ImplicitUsings>disable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <!-- WinForms is used only for the tray icon (NotifyIcon) and System.Drawing screen capture. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>FDistractions</AssemblyName>
+    <RootNamespace>FDistractions.App</RootNamespace>
+    <!-- WFO0003 is WinForms-only advice; this is a WPF app, where app.manifest is the way to opt in to per-monitor DPI. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FDistractions.Core\FDistractions.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="..\..\..\..\assets\icon.png" Link="Assets\icon.png" />
+  </ItemGroup>
+
+</Project>
