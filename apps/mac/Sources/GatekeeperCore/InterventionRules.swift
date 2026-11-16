@@ -47,6 +47,7 @@ public enum SceneFreshness {
 public struct InterventionRules {
     private struct Approval {
         let fingerprint: ScreenFingerprint
+        let context: ScreenWindowContext?
         let expiresAt: Date
     }
     private var approvals: [UInt32: Approval] = [:]
@@ -66,7 +67,7 @@ public struct InterventionRules {
     }
     public func recalled(current: [ScreenFingerprint], contexts: [UInt32: ScreenWindowContext], at now: Date) -> [InterventionCandidate] {
         current.compactMap { screen in
-            guard !isApproved(screen, at: now), let match = recent.first(where: {
+            guard !isApproved(screen, context: contexts[screen.displayID], at: now), let match = recent.first(where: {
                 now < $0.expiresAt && $0.candidate.id == screen.displayID && $0.candidate.context != nil &&
                 $0.candidate.context == contexts[screen.displayID] &&
                 !ScreenComparison.changed([screen], since: [$0.candidate.fingerprint])
@@ -80,12 +81,26 @@ public struct InterventionRules {
         for id in expired { approvals.removeValue(forKey: id) }
         return !expired.isEmpty
     }
-    public mutating func approve(_ fingerprint: ScreenFingerprint, at now: Date) {
-        approvals[fingerprint.displayID] = Approval(fingerprint: fingerprint, expiresAt: now.addingTimeInterval(120))
+    public mutating func approve(_ fingerprint: ScreenFingerprint, context: ScreenWindowContext? = nil, at now: Date) {
+        approvals[fingerprint.displayID] = Approval(fingerprint: fingerprint, context: context, expiresAt: now.addingTimeInterval(120))
     }
-    public func isApproved(_ current: ScreenFingerprint, followup: ScreenFingerprint? = nil, at now: Date) -> Bool {
+    public func isApproved(_ current: ScreenFingerprint, followup: ScreenFingerprint? = nil, context: ScreenWindowContext? = nil, at now: Date) -> Bool {
         guard let approval = approvals[current.displayID], now < approval.expiresAt else { return false }
+        if let approvedContext = approval.context, approvedContext != context { return false }
         return SceneFreshness.matches(approval.fingerprint, current: current, followup: followup)
+    }
+    @discardableResult public mutating func invalidateChangedWindows(_ contexts: [UInt32: ScreenWindowContext]) -> Bool {
+        let changed = approvals.compactMap { id, approval -> UInt32? in
+            guard let approved = approval.context, let current = contexts[id], approved != current else { return nil }
+            return id
+        }
+        for id in changed { approvals.removeValue(forKey: id) }
+        return !changed.isEmpty
+    }
+    @discardableResult public mutating func invalidateChangedViews(_ current: [ScreenFingerprint], contexts: [UInt32: ScreenWindowContext], at now: Date) -> Bool {
+        let changed = current.filter { approvals[$0.displayID] != nil && !isApproved($0, context: contexts[$0.displayID], at: now) }.map(\.displayID)
+        for id in changed { approvals.removeValue(forKey: id) }
+        return !changed.isEmpty
     }
     public func candidates(verdict: Verdict, assessed: [ScreenFingerprint], current: [ScreenFingerprint],
                            followup: [ScreenFingerprint] = [], assessedAt: Date, now: Date,
@@ -103,7 +118,7 @@ public struct InterventionRules {
             let validView = oldWindow != nil || newWindow != nil ? oldWindow != nil && oldWindow == newWindow :
                 SceneFreshness.matches(evidence, current: latest, followup: next)
             guard validView,
-                  !isApproved(latest, followup: next, at: now) else { return nil }
+                  !isApproved(latest, followup: next, context: newWindow, at: now) else { return nil }
             return InterventionCandidate(fingerprint: next ?? latest, screenIndex: screen.screenIndex, reason: screen.reason, context: newWindow)
         }
     }

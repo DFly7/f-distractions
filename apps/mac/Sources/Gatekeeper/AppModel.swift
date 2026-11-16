@@ -295,6 +295,7 @@ import GatekeeperCore
                 try Task.checkCancellation()
                 guard sessionIsCurrent(id), contextRevision == revision else { return }
                 let contexts = windowContexts(captures)
+                if interventionRules.invalidateChangedViews(captures.map(\.fingerprint), contexts: contexts, at: currentTime()) { correctionNote = nil }
                 var retained = interventions.filter { candidate in
                     if let context = candidate.context { return context == contexts[candidate.id] }
                     return false
@@ -479,6 +480,7 @@ import GatekeeperCore
                 if automatic { guard sessionIsCurrent(sessionID) else { return } }
                 let fingerprints = captures.map(\.fingerprint)
                 if automatic {
+                    if interventionRules.invalidateChangedViews(fingerprints, contexts: windowContexts(captures), at: currentTime()) { correctionNote = nil }
                     if !interventions.isEmpty {
                         let remaining = try await retainedInterventions(current: fingerprints, contexts: windowContexts(captures))
                         try Task.checkCancellation()
@@ -548,7 +550,7 @@ import GatekeeperCore
     }
 
     func contextChanged(_ trigger: CheckTrigger) {
-        interventionRules.clearApprovals(); correctionNote = nil
+        if interventionRules.invalidateChangedWindows(pollWindowContexts()) { correctionNote = nil }
         if trigger == .displayChange {
             contextRevision += 1
             interventionRules.reset()
@@ -574,10 +576,11 @@ import GatekeeperCore
 
     func markRelevant(displayID: UInt32) {
         guard let candidate = interventions.first(where: { $0.id == displayID }), session?.state == .running else { return }
-        interventionRules.approve(candidate.fingerprint, at: currentTime())
+        let latest = screenshots.first { $0.id == displayID && $0.context == candidate.context }
+        interventionRules.approve(latest?.fingerprint ?? candidate.fingerprint, context: latest?.context ?? candidate.context, at: currentTime())
         setInterventions(interventions.filter { $0.id != displayID }, allowRemoval: true)
         correctionNote = "Screen \(candidate.screenIndex) approved for this view for up to 2 minutes."
-        recordEvent(kind: "correction", reason: "You marked Screen \(candidate.screenIndex) relevant. This view is exempt from blur for up to 2 minutes, until an app switch or a scene change.")
+        recordEvent(kind: "correction", reason: "You marked Screen \(candidate.screenIndex) relevant. This view is exempt from blur for up to 2 minutes, until this screen’s window/tab or content changes.")
     }
 
     func takeBreak() { requestSessionExit(.pause) }
@@ -662,7 +665,7 @@ import GatekeeperCore
             let latest = samples.0.first { $0.displayID == id }
             let following = samples.1.first { $0.displayID == id }
             let reason = latest == nil ? "display unavailable" :
-                interventionRules.isApproved(latest!, followup: following, at: currentTime()) ? "view approved by you" :
+                interventionRules.isApproved(latest!, followup: following, context: samples.2[id], at: currentTime()) ? "view approved by you" :
                 capturedContext != contextRevision ? "display arrangement changed" :
                 assessedContexts[id] != nil ? "the visible app window changed" : "content changed and no window identity was available"
             withheld.append("Screen \(screen.screenIndex): \(reason)")
@@ -676,7 +679,7 @@ import GatekeeperCore
         if candidates.isEmpty && !result.screens.filter({ $0.status == "off_task" }).allSatisfy({ screen in
             guard assessed.indices.contains(screen.screenIndex - 1),
                   let current = samples.0.first(where: { $0.displayID == assessed[screen.screenIndex - 1].displayID }) else { return false }
-            return interventionRules.isApproved(current, followup: samples.1.first { $0.displayID == current.displayID }, at: currentTime())
+            return interventionRules.isApproved(current, followup: samples.1.first { $0.displayID == current.displayID }, context: samples.2[current.displayID], at: currentTime())
         }) {
             queueSessionCheck(.visualChange)
         }

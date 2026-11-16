@@ -66,6 +66,28 @@ final class InterventionRulesTests: XCTestCase {
             current: screens, assessedAt: now, now: now, contextUnchanged: true).count, 2)
     }
 
+    func testCorrectionIsBoundToItsScreenWindowAndExpiresNormally() {
+        var rules = InterventionRules()
+        let approved = ScreenWindowContext(windowID: 10, processID: 77, navigationToken: 1)
+        let other = ScreenWindowContext(windowID: 20, processID: 88, navigationToken: 2)
+        rules.approve(image(), context: approved, at: now)
+        XCTAssertFalse(rules.invalidateChangedWindows([1: approved, 2: other]))
+        XCTAssertTrue(rules.isApproved(image(), context: approved, at: now.addingTimeInterval(8)))
+        XCTAssertFalse(rules.isApproved(image(), context: other, at: now.addingTimeInterval(8)))
+        XCTAssertTrue(rules.invalidateChangedWindows([1: other]))
+        XCTAssertFalse(rules.isApproved(image(), context: approved, at: now.addingTimeInterval(9)))
+        rules.approve(image(), context: approved, at: now)
+        XCTAssertFalse(rules.isApproved(image(), context: approved, at: now.addingTimeInterval(120)))
+    }
+
+    func testChangedContentEndsCorrectionWithoutWhitelistingTheWindow() {
+        var rules = InterventionRules()
+        let context = ScreenWindowContext(windowID: 10, processID: 77)
+        rules.approve(image(), context: context, at: now)
+        XCTAssertTrue(rules.invalidateChangedViews([image(200)], contexts: [1: context], at: now.addingTimeInterval(1)))
+        XCTAssertFalse(rules.isApproved(image(), context: context, at: now.addingTimeInterval(2)))
+    }
+
     func testVideoMotionCanChangeWhileStablePageChromeRemainsTheSame() {
         let evidence = image()
         var a = evidence.pixels, b = evidence.pixels

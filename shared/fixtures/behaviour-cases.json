@@ -112,5 +112,17 @@
     "given": "The model responds off_task with evidenceSource inactive_navigation, monitoring_ui or unreadable.",
     "when": "Validate the assessment.",
     "then": "Reject the response as an error: do not create a new blur and do not dismiss an already locked blur."
+  },
+  {
+    "name": "correction-other-monitor-switch",
+    "given": "Screen 1 has a view-scoped relevance correction with matching window/title and pixels.",
+    "when": "Switch apps or windows on Screen 2 within two minutes.",
+    "then": "Keep Screen 1 correction; do not reblur it solely because of the global activation event."
+  },
+  {
+    "name": "correction-own-view-change",
+    "given": "Screen 1 has a relevance correction.",
+    "when": "Change Screen 1 window/tab or significantly change its content, then return to the old view.",
+    "then": "The old correction has ended; do not whitelist the whole app or reinstate that expired view exception."
   }
 ]

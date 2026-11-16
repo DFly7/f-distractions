@@ -31,7 +31,7 @@ The blur background is click-through and the card contains deliberate actions. M
 ## Explicit actions
 
 - **Return to work:** fade only the clicked screen's blur/card away over 450 ms. Give three seconds to navigate; other screens remain blurred. Do not approve the view or activate another app. Old in-flight results cannot immediately undo this grace period. Afterward, a matching recently confirmed distraction can reblur locally; changed content gets priority AI reassessment.
-- **This is relevant:** immediately clear only that screen, record a correction and exempt the current view for up to two minutes. An app/display switch, sufficiently changed content or expiry ends the exception. This is not a permanent site allowlist or model retraining.
+- **This is relevant:** immediately clear only that screen, record a correction and exempt the current view for up to two minutes. A window/tab change on that screen, sufficiently changed content, a display change or expiry ends the exception. App switches or navigation on other screens do not clear it. The correction is tied to that screen’s window/title identity plus screenshot fingerprint, not a global app-switch event. This is not a permanent site allowlist or model retraining.
 - **Take a break:** request the same ten-second continuous hold used for early pause. On completion, pause the timer, stop monitoring and remove overlays; resume explicitly.
 
 ## Early-exit friction

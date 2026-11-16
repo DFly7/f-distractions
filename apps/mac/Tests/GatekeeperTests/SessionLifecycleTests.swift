@@ -425,6 +425,29 @@ import GatekeeperCore
         XCTAssertTrue(model.interventions.isEmpty)
     }
 
+    func testCorrectionSurvivesAppSwitchOnAnotherMonitor() async {
+        let approved = ScreenWindowContext(windowID: 10, processID: 77, navigationToken: 1)
+        trackedWindow = approved
+        model.pollWindowContexts = { [1: approved, 2: ScreenWindowContext(windowID: 20, processID: 88)] }
+        client.reply = offTask()
+        await start()
+        model.markRelevant(displayID: 1)
+        model.pollWindowContexts = { [1: approved, 2: ScreenWindowContext(windowID: 21, processID: 99)] }
+        model.contextChanged(.appSwitch)
+        await model.cachedCheckTask?.value
+        XCTAssertTrue(model.interventions.isEmpty)
+        clock.now += 4; model.tickSession()
+        clock.now += 1; model.tickSession(); await model.checkTask?.value
+        XCTAssertEqual(client.requests, 2)
+        XCTAssertTrue(model.interventions.isEmpty)
+        trackedWindow = ScreenWindowContext(windowID: 30, processID: 66, navigationToken: 2)
+        model.pollWindowContexts = { [1: ScreenWindowContext(windowID: 30, processID: 66, navigationToken: 2)] }
+        model.contextChanged(.navigation)
+        clock.now += 4; model.tickSession()
+        clock.now += 1; model.tickSession(); await model.checkTask?.value
+        XCTAssertEqual(model.interventions.count, 1)
+    }
+
     private func offTask() -> Verdict {
         Verdict(status: "off_task", reason: "Unrelated feed", nextStep: "Return to work",
                 screens: [ScreenVerdict(screenIndex: 1, status: "off_task", reason: "Unrelated feed")])
