@@ -8,6 +8,9 @@ import GatekeeperCore
         let connection = FakeConnection()
         let store = SessionStore(file: FileManager.default.temporaryDirectory.appendingPathComponent("gatekeeper-auth-test-\(UUID().uuidString)/sessions.json"))
         let model = AppModel(client: connection, sessionStore: store)
+        // These tests exercise connection state with a valid task, even on a fresh install.
+        model.goal = "Write the project documentation"
+        model.taskContext = "Review the project and document its behaviour."
         model.openSignInURL = { _ in true }
         await model.connect()
         return (model, connection)
