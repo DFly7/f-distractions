@@ -124,5 +124,23 @@
     "given": "Screen 1 has a relevance correction.",
     "when": "Change Screen 1 window/tab or significantly change its content, then return to the old view.",
     "then": "The old correction has ended; do not whitelist the whole app or reinstate that expired view exception."
+  },
+  {
+    "name": "same-title-view-change-priority",
+    "given": "The app window and title stay the same while an old view has been assessed.",
+    "when": "Switch to a substantially different view; two local samples confirm settled changed content rather than video motion.",
+    "then": "Queue priority assessment before the background interval; do not blur unassessed content."
+  },
+  {
+    "name": "superseded-inference",
+    "given": "One AI request is in flight and a newer app/tab/view appears.",
+    "when": "The newer scene settles.",
+    "then": "Cancel the superseded turn on the existing connection if supported, discard obsolete results, and assess the latest view without overlapping requests. Keep locked blur and the previous completed result."
+  },
+  {
+    "name": "video-does-not-thrash-inference",
+    "given": "A playing video changes pixels while its stable page region remains unchanged.",
+    "when": "Local visual probes run during AI analysis.",
+    "then": "Do not repeatedly cancel requests just for moving video pixels."
   }
 ]

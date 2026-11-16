@@ -5,7 +5,7 @@ import GatekeeperCore
 @main struct SmokeCheck {
     @MainActor static func main() async {
         let client = CodexClient()
-        client.onDiagnostic = { if $0.hasPrefix("AI request starting:") { print($0) } }
+        client.onDiagnostic = { if $0.hasPrefix("AI request") || $0.hasPrefix("AI setup") { print($0) } }
         do {
             try await client.connect()
             guard let account = try await client.account() else {
@@ -22,6 +22,31 @@ import GatekeeperCore
                 model = selected
             } else { model = models.first(where: \.isDefault) ?? models[0] }
             print("PASS: model catalogue loaded; selected \(model.id)")
+            if CommandLine.arguments.contains("--interrupt-fixture") {
+                let url = try fixture("Coursework report\n\nEvaluate chatbot intent routing with labelled queries and a confusion matrix.")
+                defer { try? FileManager.default.removeItem(at: url) }
+                var cancellation: Task<Bool, Never>?
+                client.onDiagnostic = { line in
+                    print(line)
+                    if line.hasPrefix("AI request starting:"), cancellation == nil {
+                        cancellation = Task {
+                            try? await Task.sleep(nanoseconds: 500_000_000)
+                            return await client.interruptAnalysis()
+                        }
+                    }
+                }
+                do {
+                    _ = try await client.analyse(goal: "Write the chatbot coursework report.", image: url, model: model.id)
+                    throw GatekeeperError("Expected superseded inference to be cancelled")
+                } catch is CancellationError { }
+                guard await cancellation?.value == true else { throw GatekeeperError("Turn interruption did not succeed") }
+                print("PASS: obsolete turn cancelled without stopping the connection")
+                client.onDiagnostic = { if $0.hasPrefix("AI request") || $0.hasPrefix("AI setup") { print($0) } }
+                let result = try await client.analyse(goal: "Write the chatbot coursework report.", image: url, model: model.id)
+                guard result.status == "on_task" else { throw GatekeeperError("Expected a fresh on-task result after interruption") }
+                print("PASS: same connection completed the replacement request")
+                client.stop(); return
+            }
             if CommandLine.arguments.contains("--focus-ui-fixture") {
                 let url = try fixture("F Distractions\nFocus session: Write the chatbot report\nTimer: 34:20 remaining\n\nLAST COMPLETED CHECK — HISTORICAL SCREENSHOT PREVIEW\nCaptured earlier: AI conversation about planning a holiday\nPrevious reason: This holiday discussion was unrelated.\n\nReturn to work | This is relevant | View screenshots & reasons")
                 defer { try? FileManager.default.removeItem(at: url) }

@@ -77,6 +77,21 @@ final class MonitoringPolicyTests: XCTestCase {
         XCTAssertEqual(policy.trigger(for: [screen()], at: now.addingTimeInterval(3)), .appSwitch)
     }
 
+    func testSettledViewChangeGetsPriorityAndMovingVideoDoesNot() {
+        let old = screen()
+        XCTAssertTrue(ScreenComparison.substantialSettledChange(previous: [old], current: [screen(220)], followup: [screen(220)]))
+        var a = old.pixels, b = old.pixels
+        for i in 3000..<a.count { a[i] = 240; b[i] = 20 }
+        let frameA = ScreenFingerprint(displayID: 1, sourceWidth: 1600, sourceHeight: 900, pixels: a)
+        let frameB = ScreenFingerprint(displayID: 1, sourceWidth: 1600, sourceHeight: 900, pixels: b)
+        XCTAssertFalse(ScreenComparison.substantialSettledChange(previous: [old], current: [frameA], followup: [frameB]))
+        var policy = MonitoringPolicy(minimumGap: 60)
+        policy.beganRequest(at: now); policy.succeeded(with: [old])
+        policy.queue(.viewChange, at: now.addingTimeInterval(1))
+        XCTAssertNil(policy.trigger(for: [screen(220)], at: now.addingTimeInterval(2)))
+        XCTAssertEqual(policy.trigger(for: [screen(220)], at: now.addingTimeInterval(3)), .viewChange)
+    }
+
     func testFailedChecksBackOffAndKeepLastSuccessfulBaseline() {
         var policy = MonitoringPolicy(minimumGap: 15)
         policy.beganRequest(at: now); policy.succeeded(with: [screen()])

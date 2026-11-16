@@ -29,6 +29,25 @@ public struct ScreenFingerprint: Equatable {
 }
 
 public enum ScreenComparison {
+    /// A substantial change in the stable region identifies navigation without
+    /// treating moving video pixels as a new page every second.
+    public static func substantialSettledChange(previous: [ScreenFingerprint], current: [ScreenFingerprint], followup: [ScreenFingerprint]) -> Bool {
+        for old in previous {
+            guard let a = current.first(where: { $0.displayID == old.displayID }),
+                  let b = followup.first(where: { $0.displayID == old.displayID }),
+                  old.sourceWidth == a.sourceWidth, old.sourceHeight == a.sourceHeight,
+                  a.sourceWidth == b.sourceWidth, a.sourceHeight == b.sourceHeight,
+                  !old.pixels.isEmpty, old.pixels.count == a.pixels.count, a.pixels.count == b.pixels.count else { continue }
+            var stable = 0, changed = 0
+            for i in old.pixels.indices where abs(Int(a.pixels[i]) - Int(b.pixels[i])) <= 18 {
+                stable += 1
+                if abs(Int(old.pixels[i]) - Int(b.pixels[i])) > 18 { changed += 1 }
+            }
+            if stable >= old.pixels.count / 5 && Double(changed) / Double(stable) >= 0.18 { return true }
+        }
+        return false
+    }
+
     /// Compare against the last successful analysis, not the previous sample.
     public static func changed(_ current: [ScreenFingerprint], since baseline: [ScreenFingerprint]?) -> Bool {
         guard let baseline, current.count == baseline.count else { return true }
@@ -50,6 +69,7 @@ public enum CheckTrigger: String, Codable {
     case initial = "Session started"
     case appSwitch = "App switched"
     case navigation = "Window/tab changed"
+    case viewChange = "View content changed"
     case displayChange = "Displays changed"
     case visualChange = "Screen changed"
     case manual = "Requested check"
@@ -67,10 +87,10 @@ public struct MonitoringPolicy {
     public init(minimumGap: TimeInterval) { self.minimumGap = max(1, minimumGap) }
 
     public mutating func queue(_ trigger: CheckTrigger, at now: Date) {
-        let existingIsPriority = pendingTrigger == .appSwitch || pendingTrigger == .navigation || pendingTrigger == .displayChange || pendingTrigger == .manual
-        let incomingIsPriority = trigger == .appSwitch || trigger == .navigation || trigger == .displayChange || trigger == .manual
+        let existingIsPriority = pendingTrigger == .appSwitch || pendingTrigger == .navigation || pendingTrigger == .viewChange || pendingTrigger == .displayChange || pendingTrigger == .manual
+        let incomingIsPriority = trigger == .appSwitch || trigger == .navigation || trigger == .viewChange || trigger == .displayChange || trigger == .manual
         if (baseline != nil || pendingTrigger != .initial) && (!existingIsPriority || incomingIsPriority) { pendingTrigger = trigger }
-        if trigger == .appSwitch || trigger == .navigation || trigger == .displayChange { settleUntil = now.addingTimeInterval(0.35) }
+        if trigger == .appSwitch || trigger == .navigation || trigger == .viewChange || trigger == .displayChange { settleUntil = now.addingTimeInterval(0.35) }
     }
 
     public func trigger(for screens: [ScreenFingerprint], at now: Date) -> CheckTrigger? {
@@ -98,7 +118,7 @@ public struct MonitoringPolicy {
 
     private var requestGap: TimeInterval {
         switch pendingTrigger {
-        case .appSwitch, .navigation, .displayChange, .manual: return min(3, minimumGap)
+        case .appSwitch, .navigation, .viewChange, .displayChange, .manual: return min(3, minimumGap)
         default: return minimumGap
         }
     }

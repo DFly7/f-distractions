@@ -109,6 +109,8 @@ public struct CodexModel: Identifiable {
     private var turnWaiter: CheckedContinuation<String, Error>?
     private var turnDeadline: Task<Void, Never>?
     private var currentThread: String?
+    private var currentTurnID: String?
+    private var interruptRequested = false
     private var responseText = ""
     private var ready = false
     private var activeLoginID: String?
@@ -287,6 +289,7 @@ public struct CodexModel: Identifiable {
     }
 
     private func structuredRequest(instructions: String, input: [[String: Any]], schema: [String: Any], model: String) async throws -> String {
+        let requestStart = ProcessInfo.processInfo.systemUptime
         guard turnWaiter == nil else { throw GatekeeperError("An AI request is already running.") }
         guard try await account() != nil else { throw GatekeeperError("Sign in with ChatGPT before checking your screen.") }
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("gatekeeper-codex", isDirectory: true)
@@ -300,9 +303,10 @@ public struct CodexModel: Identifiable {
         guard let value = thread["thread"] as? [String: Any], let threadID = value["id"] as? String else {
             throw GatekeeperError("Codex didn’t create an analysis session.")
         }
-        currentThread = threadID; responseText = ""
+        onDiagnostic?("AI setup completed: \(Int((ProcessInfo.processInfo.systemUptime - requestStart) * 1000))ms")
+        currentThread = threadID; currentTurnID = nil; interruptRequested = false; responseText = ""
         defer {
-            currentThread = nil; turnDeadline?.cancel(); turnDeadline = nil
+            currentThread = nil; currentTurnID = nil; interruptRequested = false; turnDeadline?.cancel(); turnDeadline = nil
         }
         let output: String = try await withCheckedThrowingContinuation { continuation in
             turnWaiter = continuation
@@ -320,11 +324,28 @@ public struct CodexModel: Identifiable {
                     ]
                     if lowEffortModels.contains(model) { params["effort"] = "low" }
                     onDiagnostic?("AI request starting: reasoning=\(lowEffortModels.contains(model) ? "low" : "model default")")
-                    _ = try await request("turn/start", params)
-                } catch { finishTurn(.failure(error)) }
+                    let started = try await request("turn/start", params)
+                    if currentThread == threadID { currentTurnID = (started["turn"] as? [String: Any])?["id"] as? String }
+                } catch {
+                    if currentThread == threadID { finishTurn(.failure(error)) }
+                }
             }
         }
+        onDiagnostic?("AI request completed: \(Int((ProcessInfo.processInfo.systemUptime - requestStart) * 1000))ms total")
         return output
+    }
+
+    public func interruptAnalysis() async -> Bool {
+        guard let thread = currentThread, let turn = currentTurnID, turnWaiter != nil, !interruptRequested else { return false }
+        interruptRequested = true
+        do {
+            _ = try await request("turn/interrupt", ["threadId": thread, "turnId": turn])
+            onDiagnostic?("Superseded AI turn interrupted; connection kept open")
+            return true
+        } catch {
+            if currentThread == thread { interruptRequested = false }
+            return false
+        }
     }
 
     public func stop(reason: String = "Connection stopped.") {
@@ -394,6 +415,7 @@ public struct CodexModel: Identifiable {
             return
         }
         guard let currentThread, params["threadId"] as? String == currentThread else { return }
+        if method == "turn/started", let turn = params["turn"] as? [String: Any] { currentTurnID = turn["id"] as? String }
         if method == "item/agentMessage/delta", let delta = params["delta"] as? String { responseText += delta }
         if method == "item/completed", let item = params["item"] as? [String: Any],
            item["type"] as? String == "agentMessage", let text = item["text"] as? String {
@@ -401,6 +423,9 @@ public struct CodexModel: Identifiable {
         }
         if method == "turn/completed", let turn = params["turn"] as? [String: Any] {
             guard turn["status"] as? String == "completed" else {
+                if interruptRequested, turn["status"] as? String == "interrupted" {
+                    finishTurn(.failure(CancellationError())); return
+                }
                 let error = turn["error"] as? [String: Any]
                 finishTurn(.failure(GatekeeperError(error?["message"] as? String ?? "The analysis was interrupted. Try again.")))
                 return

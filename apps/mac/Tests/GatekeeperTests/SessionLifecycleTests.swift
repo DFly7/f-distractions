@@ -30,6 +30,7 @@ import GatekeeperCore
         model.countdownDelay = {}
         model.freshnessDelay = {}
         model.cacheCheckDelay = {}
+        model.prioritySettleDelay = {}
         model.hideForWork = {}
         model.foregroundAppName = { "Test Editor" }
         model.sessionMinutes = 1; model.aiIntervalSeconds = 15
@@ -186,11 +187,12 @@ import GatekeeperCore
         XCTAssertFalse(model.interventions.isEmpty)
     }
 
-    func testAppSwitchDuringModelReplyDoesNotSuppressAnUnchangedOffTaskScreen() async {
+    func testSupersededAppSwitchReplyIsDiscardedAndNewViewRemainsQueued() async {
         client.reply = offTask()
         client.beforeReply = { [unowned self] in self.model.contextChanged(.appSwitch) }
         await start()
-        XCTAssertEqual(model.interventions.map(\.id), [1])
+        XCTAssertTrue(model.interventions.isEmpty)
+        XCTAssertEqual(model.policy.pendingTrigger, .appSwitch)
     }
 
     func testSessionStartKeepsWindowOpenWhileOneOffCheckStillHidesIt() async {
@@ -448,6 +450,38 @@ import GatekeeperCore
         XCTAssertEqual(model.interventions.count, 1)
     }
 
+    func testChangedThreadWithoutTitleChangeGetsPriorityBeforeBackgroundGap() async {
+        await start()
+        pixel = 200
+        await model.probeForViewChange()
+        XCTAssertEqual(model.policy.pendingTrigger, .viewChange)
+        client.reply = offTask()
+        clock.now += 3; model.tickSession(); await model.checkTask?.value
+        XCTAssertEqual(client.requests, 2)
+        XCTAssertEqual(model.interventions.count, 1)
+    }
+
+    func testSupersededInferenceIsInterruptedWithoutRestartingConnection() async {
+        client.holdResult = true; client.supportsInterrupt = true
+        let started = expectation(description: "Old analysis running")
+        client.onRequest = { started.fulfill() }
+        model.startSession()
+        await fulfillment(of: [started], timeout: 2)
+        let oldTask = model.checkTask
+        client.onRequest = nil
+        model.contextChanged(.navigation)
+        await model.priorityInterruptTask?.value
+        await oldTask?.value
+        XCTAssertEqual(client.interrupts, 1)
+        XCTAssertEqual(client.stops, 0)
+        XCTAssertNil(model.verdict)
+        XCTAssertNil(model.error)
+        client.holdResult = false; client.reply = offTask(); pixel = 200
+        clock.now += 3; model.tickSession(); await model.checkTask?.value
+        XCTAssertEqual(client.requests, 2)
+        XCTAssertEqual(model.interventions.count, 1)
+    }
+
     private func offTask() -> Verdict {
         Verdict(status: "off_task", reason: "Unrelated feed", nextStep: "Return to work",
                 screens: [ScreenVerdict(screenIndex: 1, status: "off_task", reason: "Unrelated feed")])
@@ -483,6 +517,9 @@ import GatekeeperCore
     var reply: Verdict?
     var beforeReply: (() -> Void)?
     var holdResult = false
+    var supportsInterrupt = false
+    var interrupts = 0
+    var stops = 0
     var onRequest: (() -> Void)?
     private var held: CheckedContinuation<Verdict, Error>?
     func connect() async throws {}
@@ -504,7 +541,14 @@ import GatekeeperCore
         if let reply { return reply }
         return try Verdict.decode("{\"status\":\"on_task\",\"reason\":\"Synthetic work\",\"nextStep\":\"Continue\"}")
     }
+    func interruptAnalysis() async -> Bool {
+        guard supportsInterrupt, let continuation = held else { return false }
+        interrupts += 1; held = nil
+        continuation.resume(throwing: CancellationError())
+        return true
+    }
     func stop(reason: String) {
+        stops += 1
         let continuation = held; held = nil
         continuation?.resume(with: Result { try result() }) // Simulate a late success after stopping.
     }
