@@ -22,6 +22,26 @@ import GatekeeperCore
                 model = selected
             } else { model = models.first(where: \.isDefault) ?? models[0] }
             print("PASS: model catalogue loaded; selected \(model.id)")
+            if CommandLine.arguments.contains("--conversation-fixture") {
+                var files: [URL] = []
+                defer { for file in files { try? FileManager.default.removeItem(at: file) } }
+                let goal = "Work on HCI chatbot coursework, using AI conversations to understand intent routing and evaluation. Unrelated dissertation work, holidays and job hunting are off task."
+                let cases = [
+                    ("HCI coursework", "User: How should I evaluate intent routing for my HCI chatbot report?\n\nAssistant: Compare predicted intents against labelled test queries. Report a confusion matrix and discuss ambiguous utterances.", "on_task"),
+                    ("Holiday planning", "User: Help me plan a beach holiday in Spain. Which resorts have the best nightlife?\n\nAssistant: Compare beach resorts, hotels and party venues. Here is a seven-day holiday itinerary.", "off_task"),
+                    ("Dissertation", "User: Help structure my unrelated dissertation on solar energy policy.\n\nAssistant: Start with renewable energy economics, policy incentives and national electricity market data.", "off_task")
+                ]
+                for (selected, messages, expected) in cases {
+                    let url = try conversationFixture(selected: selected, messages: messages)
+                    files.append(url)
+                    let result = try await client.analyse(goal: goal, image: url, model: model.id)
+                    guard result.status == expected, result.screens.first?.status == expected else {
+                        throw GatekeeperError("Conversation fixture expected \(expected), got \(result.status): \(result.reason)")
+                    }
+                    print("PASS: \(selected) classified \(expected): \(result.reason)")
+                }
+                client.stop(); return
+            }
             if CommandLine.arguments.contains("--task-brief-fixture") {
                 let started = Date()
                 let brief = try await client.refineTask(goal: "Rehearse my HCA formative demo for 25 minutes",
@@ -102,6 +122,29 @@ import GatekeeperCore
             fputs("FAIL: \(error.localizedDescription)\n", stderr)
             exit(1)
         }
+    }
+
+    // Synthetic conversation UI: the same sidebar contains related and unrelated
+    // thread names in every case. Only the displayed messages determine relevance.
+    @MainActor static func conversationFixture(selected: String, messages: String) throws -> URL {
+        let image = NSImage(size: NSSize(width: 1200, height: 760))
+        image.lockFocus()
+        NSColor.white.setFill(); NSRect(x: 0, y: 0, width: 1200, height: 760).fill()
+        NSColor(calibratedWhite: 0.93, alpha: 1).setFill(); NSRect(x: 0, y: 0, width: 240, height: 760).fill()
+        for (index, title) in ["HCI coursework", "Dissertation", "Holiday planning"].enumerated() {
+            let y = CGFloat(620 - index * 70)
+            if title == selected {
+                NSColor(calibratedWhite: 0.8, alpha: 1).setFill(); NSRect(x: 12, y: y - 10, width: 216, height: 50).fill()
+            }
+            (title as NSString).draw(at: NSPoint(x: 25, y: y), withAttributes: [.font: NSFont.systemFont(ofSize: 21), .foregroundColor: NSColor.black])
+        }
+        ("AI conversation" as NSString).draw(at: NSPoint(x: 280, y: 690), withAttributes: [.font: NSFont.systemFont(ofSize: 24, weight: .semibold), .foregroundColor: NSColor.black])
+        (messages as NSString).draw(in: NSRect(x: 280, y: 120, width: 870, height: 510), withAttributes: [.font: NSFont.systemFont(ofSize: 27), .foregroundColor: NSColor.black])
+        image.unlockFocus()
+        guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+              let data = bitmap.representation(using: .png, properties: [:]) else { throw GatekeeperError("Could not render conversation fixture") }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("gatekeeper-conversation-\(UUID().uuidString).png")
+        try data.write(to: url); return url
     }
 
     @MainActor static func fixture(_ text: String, background: NSColor = .white) throws -> URL {

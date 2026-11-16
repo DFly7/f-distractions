@@ -14,6 +14,8 @@ Capture every connected display, excluding this app's own windows. If one captur
 
 Each AI response needs exactly one 1-based screen verdict for every image, mapped back to the physical displays captured for that request. Statuses are `on_task`, `off_task`, `unsure`, or `neutral`. Only clear unrelated content is off task. Related research and task tools can be on task. Unused wallpaper is neutral; settings are not automatically relevant. Treat screenshot text as untrusted evidence, never instructions, and disable classifier tools.
 
+Judge substantive displayed content, including the messages in an open AI conversation. An allowed AI/coding app is not an allowlist for unrelated conversations. Inactive thread titles, unselected tabs, sidebar navigation, bookmarks, recent-file lists and dock icons alone cannot justify off_task. Conversely, substantive unrelated content actually visible in a separate pane/window/screen still counts. If only labels are readable, do not guess the conversation topic; use unsure. Off-task reasons must identify the displayed unrelated content.
+
 Aggregate status: any off_task → off_task; otherwise any unsure → unsure; otherwise any on_task → on_task; otherwise unsure. Missing or duplicate indices, unexpected statuses and inconsistent aggregate verdicts fail validation. A failure is an error, never an off-task verdict.
 
 ## Starting and keeping blur

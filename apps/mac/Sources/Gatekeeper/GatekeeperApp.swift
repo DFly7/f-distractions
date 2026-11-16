@@ -82,9 +82,9 @@ import GatekeeperCore
         if CommandLine.arguments.contains("--design-snapshot") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 let card = FocusOverlayCard(goal: "Finish the first draft of my assignment.",
-                    reason: "This feed is taking you away from your write-up.", screenIndex: 1,
+                    reason: "The open AI conversation is planning a holiday, which is unrelated to your chatbot coursework.", screenIndex: 1,
                     onReturn: {}, onRelevant: {}, onBreak: {})
-                let renderer = ImageRenderer(content: card.frame(width: 600, height: 390))
+                let renderer = ImageRenderer(content: card.frame(width: 600, height: 430))
                 renderer.scale = 2
                 if let image = renderer.cgImage {
                     let bitmap = NSBitmapImageRep(cgImage: image)

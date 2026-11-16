@@ -58,7 +58,7 @@ import GatekeeperCore
             }
             blur.contentView = container
             let width = min(600, screen.visibleFrame.width - 40)
-            let height: CGFloat = min(390, screen.visibleFrame.height - 40)
+            let height: CGFloat = min(430, screen.visibleFrame.height - 40)
             let frame = NSRect(x: screen.visibleFrame.midX - width / 2, y: screen.visibleFrame.midY - height / 2,
                                width: width, height: height)
             let card = FocusPanel(frame: frame, interactive: true)
@@ -142,12 +142,19 @@ struct FocusOverlayCard: View {
                     .foregroundStyle(FocusBrand.muted)
             }
             VStack(alignment: .leading, spacing: 8) {
-                Text("You had a plan.").font(.system(size: 14, weight: .medium)).foregroundStyle(FocusBrand.muted)
-                Text(goal).font(.system(size: 27, weight: .semibold)).tracking(-0.8)
-                    .lineLimit(3).minimumScaleFactor(0.8).fixedSize(horizontal: false, vertical: true)
+                Label("WHY THIS SCREEN WAS BLURRED", systemImage: "eye.slash")
+                    .font(.system(size: 10, weight: .semibold)).tracking(0.8)
+                    .foregroundStyle(FocusBrand.accent)
+                Text(reason).font(.system(size: 23, weight: .semibold)).tracking(-0.5)
+                    .lineLimit(4).minimumScaleFactor(0.85).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             }
-            Text(reason).font(.system(size: 12)).foregroundStyle(FocusBrand.muted)
-                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Your focus").font(.system(size: 11, weight: .semibold)).foregroundStyle(FocusBrand.muted)
+                Text(goal).font(.system(size: 13)).foregroundStyle(FocusBrand.muted)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            }.padding(13).frame(maxWidth: .infinity, alignment: .leading)
+                .background(FocusBrand.ink.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
             Spacer(minLength: 0)
             HStack(spacing: 10) {
                 Button(action: onReturn) {

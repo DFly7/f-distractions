@@ -43,6 +43,8 @@ Each model response must include exactly one indexed verdict for every captured 
 
 Before showing an overlay, Gatekeeper takes a fresh local sample. Results older than 20 seconds or from a changed display arrangement are withheld and queued for reassessment. Each screen tracks its visible app window and a transient hash of the window title. Scrolling within the same window no longer vetoes blur. A different window or title (for example a browser tab switch) invalidates the old judgment. If window metadata is unavailable, pixel comparisons and a second local sample provide a conservative fallback. These are heuristics: navigation that preserves a title may be missed.
 
+The card leads with **Why this screen was blurred** and a prominent per-screen reason; your goal is a smaller reminder beneath it. This describes the blur trigger, which remains locked until an explicit action even if later content changes.
+
 The blur grows inward from all four edges over 1.4 seconds. Its background is click-through; a separate card has the deliberate actions. Native panels stay above ordinary windows without activating Gatekeeper. Cmd-Tab and the menu bar remain available. The panels have no close button and Escape does not dismiss them.
 
 - **Return to work** fades only the clicked screen’s blur/card away over 450 ms. Other screens remain guarded. After three seconds, a local sample can immediately restore blur if the recently confirmed distraction still matches its window/title and fingerprint. Changed views get a priority AI assessment. Earlier in-flight screenshots cannot reapply blur to the returning screen. The button does not approve the distraction or activate another app. Fresh AI judgments still incur inference latency; error backoff can delay them.
@@ -89,6 +91,7 @@ swift run SmokeCheck --analyse-fixture
 swift run SmokeCheck --settings-fixture
 swift run SmokeCheck --multi-screen-fixture
 swift run SmokeCheck --task-brief-fixture
+swift run SmokeCheck --conversation-fixture --model gpt-6-luna
 ```
 
 Unit tests cover grayscale fingerprints, image changes across displays, accumulated changes, app-switch settling, cooldowns, error backoff, queued events during inference, timed session expiry, pause/resume, non-overlapping requests, late-result rejection, temporary-file cleanup, persisted summaries, interrupted-session recovery and abandoned sign-in recovery. Intervention tests additionally cover physical screen targeting, structured verdict validation, stale results, moving-content tolerance, scoped correction expiry, return/break actions, overlay removal on lifecycle changes, native panel ordering and click-through behavior. They use an injected clock, synthetic captures and a fake Codex connection; panel tests construct native windows without displaying them.

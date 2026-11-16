@@ -76,5 +76,23 @@
     "given": "A completed assessment is visible.",
     "when": "A new inference starts, fails or is cancelled.",
     "then": "Keep the previous verdict, images and capture time together without collapsing the layout."
+  },
+  {
+    "name": "relevant-chat-inactive-sidebar",
+    "given": "The task is HCI chatbot coursework; an AI app displays a conversation about evaluating chatbot intent routing.",
+    "when": "An inactive sidebar thread is titled Dissertation and an unselected tab mentions holiday planning.",
+    "then": "on_task: inactive labels alone do not establish distraction; do not initiate blur."
+  },
+  {
+    "name": "unrelated-chat-allowed-tool",
+    "given": "The task is HCI chatbot coursework and the user permits T3 and Cursor as task tools.",
+    "when": "The open AI conversation discusses planning an unrelated beach holiday, while the HCI coursework thread remains in the sidebar.",
+    "then": "off_task: identify the unrelated holiday messages; an allowed app and relevant sidebar label do not make the active conversation relevant."
+  },
+  {
+    "name": "visible-unrelated-pane",
+    "given": "The task is HCI chatbot coursework; a relevant conversation is in the foreground.",
+    "when": "A separate visible pane or another screen displays an unrelated social feed or unrelated AI conversation.",
+    "then": "off_task for the screen showing substantive unrelated content, even if it lacks keyboard focus."
   }
 ]
