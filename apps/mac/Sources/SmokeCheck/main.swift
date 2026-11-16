@@ -22,6 +22,35 @@ import GatekeeperCore
                 model = selected
             } else { model = models.first(where: \.isDefault) ?? models[0] }
             print("PASS: model catalogue loaded; selected \(model.id)")
+            if CommandLine.arguments.contains("--parallel-fixture") {
+                let peer = CodexClient()
+                defer { peer.stop(); client.stop() }
+                try await peer.connect()
+                guard try await peer.account() != nil else { throw GatekeeperError("Second slot needs local subscription sign-in") }
+                _ = try await peer.models()
+                let work = try fixture("Coursework report\nEvaluate chatbot intent routing with labelled queries and a confusion matrix.")
+                let distraction = try fixture("Holiday planning\nChoose beach hotels and book a sightseeing trip unrelated to coursework.")
+                defer { try? FileManager.default.removeItem(at: work); try? FileManager.default.removeItem(at: distraction) }
+                let origin = ProcessInfo.processInfo.systemUptime
+                var starts: [Int: Double] = [:]
+                for (slot, connection) in [client, peer].enumerated() {
+                    connection.onDiagnostic = { line in
+                        if line.hasPrefix("AI request starting:") { starts[slot] = ProcessInfo.processInfo.systemUptime }
+                        if line.hasPrefix("AI request") || line.hasPrefix("AI setup") {
+                            print("slot=\(slot) elapsed_ms=\(Int((ProcessInfo.processInfo.systemUptime - origin) * 1000)) \(line)")
+                        }
+                    }
+                }
+                async let first = timedAnalysis(client, image: work, model: model.id)
+                try await Task.sleep(nanoseconds: 200_000_000)
+                async let second = timedAnalysis(peer, image: distraction, model: model.id)
+                let (a, b) = try await (first, second)
+                guard a.0.status == "on_task", b.0.status == "off_task", let secondStart = starts[1], secondStart < a.1 else {
+                    throw GatekeeperError("Expected overlapping independent on-task/off-task classifications")
+                }
+                print("PASS: second inference started before the first finished; both structured verdicts valid. wall_ms=\(Int((max(a.1, b.1) - origin) * 1000))")
+                return
+            }
             if CommandLine.arguments.contains("--supporting-work-fixture") {
                 var files: [URL] = []
                 defer { for file in files { try? FileManager.default.removeItem(at: file) } }
@@ -196,6 +225,11 @@ import GatekeeperCore
               let data = bitmap.representation(using: .png, properties: [:]) else { throw GatekeeperError("Could not render conversation fixture") }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("gatekeeper-conversation-\(UUID().uuidString).png")
         try data.write(to: url); return url
+    }
+
+    @MainActor static func timedAnalysis(_ client: CodexClient, image: URL, model: String) async throws -> (Verdict, Double) {
+        let result = try await client.analyse(goal: "Write the chatbot coursework report.", image: image, model: model)
+        return (result, ProcessInfo.processInfo.systemUptime)
     }
 
     @MainActor static func fixture(_ text: String, background: NSColor = .white) throws -> URL {

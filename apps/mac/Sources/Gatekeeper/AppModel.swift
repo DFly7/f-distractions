@@ -100,6 +100,25 @@ import GatekeeperCore
     var cacheCheckDelay: () async throws -> Void = { try await Task.sleep(nanoseconds: 300_000_000) }
     private(set) var cachedCheckTask: Task<Void, Never>?
     let client: any GatekeeperConnection
+    private let secondaryClient: (any GatekeeperConnection)?
+    private(set) var secondaryCheckTask: Task<Void, Never>?
+    private(set) var warmSecondaryTask: Task<Void, Never>?
+    private var secondaryReady = false
+    private var busySlots: Set<Int> = []
+    private var inferenceSlots: Set<Int> = []
+    private var slotTraces: [Int: Diagnostics.Trace] = [:]
+    private var priorityPending = false
+    private var submittedViews: [UInt32: (fingerprint: ScreenFingerprint, context: ScreenWindowContext?, pointerEpoch: Int)] = [:]
+    private var pointerEpochs: [UInt32: Int] = [:]
+    private var scrollHints: [UInt32: (epoch: Int, context: ScreenWindowContext?, date: Date)] = [:]
+    private var inputContexts: [UInt32: ScreenWindowContext] = [:]
+    private var globalPointerMonitor: Any?
+    private var localPointerMonitor: Any?
+    private var displayOrder: [UInt32] = []
+    private var requestSequence = 0
+    private var latestRequestByDisplay: [UInt32: Int] = [:]
+    private var completedScreens: [UInt32: (capture: CapturedScreen, verdict: ScreenVerdict, date: Date, nextStep: String)] = [:]
+    @Published private(set) var assessmentTimes: [UInt32: Date] = [:]
     private var signInDeadline: Task<Void, Never>?
     private var loginAttempt: UUID?
     var openSignInURL: (URL) -> Bool = { NSWorkspace.shared.open($0) }
@@ -126,8 +145,9 @@ import GatekeeperCore
         return session ?? history.first
     }
 
-    init(client: (any GatekeeperConnection)? = nil, sessionStore: SessionStore? = nil) {
+    init(client: (any GatekeeperConnection)? = nil, sessionStore: SessionStore? = nil, secondaryClient: (any GatekeeperConnection)? = nil) {
         self.client = client ?? CodexClient()
+        self.secondaryClient = secondaryClient ?? (client == nil ? CodexClient() : nil)
         self.sessionStore = sessionStore ?? SessionStore()
         do {
             history = try self.sessionStore.load().map { item in
@@ -141,7 +161,10 @@ import GatekeeperCore
         } catch { historyError = "Couldn’t load session history: \(error.localizedDescription)" }
         let client = self.client
         client.onDiagnostic = { [weak self] message in
-            Diagnostics.event("provider", trace: self?.activeAITrace, details: message)
+            Diagnostics.event("provider", trace: self?.slotTraces[0], details: "slot=0 " + message)
+        }
+        self.secondaryClient?.onDiagnostic = { [weak self] message in
+            Diagnostics.event("provider", trace: self?.slotTraces[1], details: "slot=1 " + message)
         }
         displayObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
@@ -206,6 +229,7 @@ import GatekeeperCore
                 selectedModel = models.first(where: { $0.id == selectedModel })?.id ?? models.first(where: { $0.id == saved })?.id ?? models.first(where: \.isDefault)?.id ?? models[0].id
                 connection = "Connected"
                 connectionRetryAt = nil
+                startWarmingSecondary()
             } else {
                 connection = "Sign-in needed"
                 Diagnostics.record("Codex connected: no signed-in account")
@@ -220,6 +244,7 @@ import GatekeeperCore
 
     func signIn() async {
         guard !signingIn, !connecting, !checking, !refiningTask, !hasActiveSession else { return }
+        warmSecondaryTask?.cancel(); secondaryClient?.stop(); secondaryReady = false
         signingIn = true; error = nil
         let attempt = UUID(); loginAttempt = attempt
         Diagnostics.record("ChatGPT browser sign-in started")
@@ -363,15 +388,19 @@ import GatekeeperCore
         if !screenAccess { requestScreenAccess() }
         guard screenAccess else { error = "Allow screen access before starting a focus session."; return }
         let now = currentTime()
+        submittedViews = [:]; latestRequestByDisplay = [:]; completedScreens = [:]; assessmentTimes = [:]
+        priorityPending = false
         pendingSceneTrace = Diagnostics.Trace()
         Diagnostics.event("session_started", trace: pendingSceneTrace)
         session = FocusSession(goal: goal.trimmingCharacters(in: .whitespacesAndNewlines), startedAt: now,
                                durationSeconds: sessionMinutes * 60, remainingSeconds: sessionMinutes * 60)
+        installPointerMonitors()
         session?.taskContext = taskContext
         UserDefaults.standard.set(taskContext, forKey: "taskContext")
         remainingSeconds = sessionMinutes * 60
         sessionDeadline = now.addingTimeInterval(Double(remainingSeconds))
         observedWindows = pollWindowContexts()
+        inputContexts = observedWindows ?? [:]; pointerEpochs = [:]; scrollHints = [:]
         policy = MonitoringPolicy(minimumGap: Double(aiIntervalSeconds))
         interventionRules.reset(); setInterventions([], allowRemoval: true); correctionNote = nil; interventionNote = nil
         viewProbeBaseline = nil
@@ -441,6 +470,9 @@ import GatekeeperCore
         if pendingSceneTrace == nil { pendingSceneTrace = Diagnostics.Trace() }
         let waitMS = max(0, Int((policy.nextAllowedRequest?.timeIntervalSince(currentTime()) ?? 0) * 1000))
         Diagnostics.event("check_queued", trace: pendingSceneTrace, details: "trigger=\(trigger.rawValue) in_flight=\(analysisInFlight) connecting=\(connecting) signing_in=\(signingIn) cooldown_ms=\(waitMS)")
+        if trigger == .visualChange, secondaryClient != nil {
+            priorityPending = true; scheduleParallelCheck()
+        }
     }
 
     func pauseSession(reason: String = "Paused by you. No captures or AI requests until resumed.") {
@@ -448,6 +480,7 @@ import GatekeeperCore
         if let sessionDeadline { remainingSeconds = max(0, Int(ceil(sessionDeadline.timeIntervalSince(currentTime())))) }
         if remainingSeconds == 0 { endSession(completed: true); return }
         session?.remainingSeconds = remainingSeconds; session?.state = .paused
+        uninstallPointerMonitors()
         returnDeadlines = [:]; pendingReturns = []
         setInterventions([], allowRemoval: true)
         sessionDeadline = nil
@@ -458,6 +491,7 @@ import GatekeeperCore
     func resumeSession() {
         guard session?.state == .paused, !checking, !connecting, account != nil else { return }
         session?.state = .running
+        installPointerMonitors()
         sessionDeadline = currentTime().addingTimeInterval(Double(remainingSeconds))
         lastSampleAt = nil
         policy.queue(.manual, at: currentTime())
@@ -470,6 +504,7 @@ import GatekeeperCore
         session?.remainingSeconds = completed ? 0 : remainingSeconds
         remainingSeconds = session?.remainingSeconds ?? 0
         session?.state = completed ? .completed : .ended
+        uninstallPointerMonitors()
         returnDeadlines = [:]; pendingReturns = []
         setInterventions([], allowRemoval: true); interventionRules.reset(); correctionNote = nil
         session?.endedAt = currentTime(); sessionDeadline = nil
@@ -492,8 +527,158 @@ import GatekeeperCore
         } else { beginCheck(automatic: false, withCountdown: true) }
     }
 
-    private func beginCheck(automatic: Bool, withCountdown: Bool) {
-        guard !checking else { return }
+    private func installPointerMonitors() {
+        guard runsSessionLoop, globalPointerMonitor == nil, localPointerMonitor == nil else { return }
+        let events: NSEvent.EventTypeMask = [.scrollWheel, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+        globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: events) { [weak self] event in
+            let scrolling = event.type == .scrollWheel
+            Task { @MainActor in self?.recordPointerAtMouseLocation(scrolling: scrolling) }
+        }
+        localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: events) { [weak self] event in
+            let scrolling = event.type == .scrollWheel
+            Task { @MainActor in self?.recordPointerAtMouseLocation(scrolling: scrolling) }
+            return event
+        }
+    }
+
+    private func uninstallPointerMonitors() {
+        if let globalPointerMonitor { NSEvent.removeMonitor(globalPointerMonitor); self.globalPointerMonitor = nil }
+        if let localPointerMonitor { NSEvent.removeMonitor(localPointerMonitor); self.localPointerMonitor = nil }
+    }
+
+    private func recordPointerAtMouseLocation(scrolling: Bool) {
+        guard runsSessionLoop, session?.state == .running,
+              let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }),
+              let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else { return }
+        recordPointerActivity(displayID: id, scrolling: scrolling)
+    }
+
+    /// Metadata only: no text, key events, pointer coordinates or destinations are stored.
+    func recordPointerActivity(displayID: UInt32, scrolling: Bool) {
+        guard session?.state == .running else { return }
+        if scrolling {
+            scrollHints[displayID] = (pointerEpochs[displayID, default: 0], inputContexts[displayID], currentTime())
+        } else {
+            pointerEpochs[displayID, default: 0] += 1; scrollHints[displayID] = nil
+        }
+    }
+
+    private func scrollContinuesView(displayID: UInt32, context: ScreenWindowContext?, epoch: Int) -> Bool {
+        guard let context, let hint = scrollHints[displayID] else { return false }
+        let age = currentTime().timeIntervalSince(hint.date)
+        return age >= 0 && age <= 1.5 && hint.epoch == epoch && pointerEpochs[displayID, default: 0] == epoch && hint.context == context &&
+            pollWindowContexts()[displayID] == context
+    }
+
+    private func startWarmingSecondary() {
+        guard let secondaryClient, !secondaryReady, warmSecondaryTask == nil, !shuttingDown else { return }
+        warmSecondaryTask = Task {
+            defer { warmSecondaryTask = nil }
+            do {
+                try await secondaryClient.connect()
+                guard try await secondaryClient.account() != nil else { throw GatekeeperError("Subscription sign-in needed.") }
+                _ = try await secondaryClient.models()
+                try Task.checkCancellation()
+                guard !shuttingDown else { return }
+                secondaryReady = true
+                Diagnostics.event("parallel_slot_ready", details: "slot=1")
+                if priorityPending { scheduleParallelCheck() }
+            } catch {
+                secondaryReady = false; secondaryClient.stop()
+                Diagnostics.failure("parallel_slot_warmup", error)
+            }
+        }
+    }
+
+    /// One coalesced pending view, sampled only when a slot can actually accept it.
+    private func scheduleParallelCheck() {
+        guard secondaryClient != nil, priorityPending, session?.state == .running,
+              priorityInterruptTask == nil, !reconnectAfterCheck, !shuttingDown else { return }
+        if busySlots.count >= 2 {
+            Diagnostics.event("parallel_pending", trace: pendingSceneTrace, details: "reason=both_slots_busy")
+            return
+        }
+        priorityInterruptTask = Task {
+            defer { priorityInterruptTask = nil }
+            do { try await prioritySettleDelay() } catch { return }
+            guard !Task.isCancelled, priorityPending, session?.state == .running, !policy.isBackingOff(at: currentTime()) else { return }
+            if !busySlots.contains(0) {
+                beginCheck(automatic: true, withCountdown: false, slot: 0, changedOnly: true)
+            } else if secondaryReady && !busySlots.contains(1) {
+                beginCheck(automatic: true, withCountdown: false, slot: 1, changedOnly: true)
+            }
+        }
+    }
+
+    private func changedCaptures(_ first: [CapturedScreen]) async throws -> (captures: [CapturedScreen], extraFiles: [URL]) {
+        var files: [URL] = []
+        do {
+            let needsMotionSample = first.contains { capture in
+                guard let previous = submittedViews[capture.id] else { return false }
+                return ScreenComparison.changed([capture.fingerprint], since: [previous.fingerprint])
+            }
+            var followup: [CapturedScreen] = []
+            if needsMotionSample {
+                try await freshnessDelay()
+                followup = try await captureScreens(); files = followup.map(\.file)
+                try Task.checkCancellation()
+            }
+            let current = followup.isEmpty ? first : followup
+            let cachedIDs = Set(interventionRules.recalled(current: first.map(\.fingerprint), followup: followup.map(\.fingerprint),
+                contexts: windowContexts(current), at: currentTime()).map(\.id))
+            let changed = current.filter { capture in
+                guard !cachedIDs.contains(capture.id),
+                      !interventionRules.isApproved(capture.fingerprint, context: capture.context, at: currentTime()) else { return false }
+                guard let previous = submittedViews[capture.id] else { return true }
+                if scrollContinuesView(displayID: capture.id, context: previous.context, epoch: previous.pointerEpoch) { return false }
+                if let old = previous.context, let new = capture.context,
+                   old.windowID != new.windowID || old.processID != new.processID { return true }
+                guard let initial = first.first(where: { $0.id == capture.id }) else { return true }
+                // Ignore progress-title churn and moving video when stable content is unchanged.
+                return !SceneFreshness.matches(previous.fingerprint, current: initial.fingerprint,
+                    followup: followup.first(where: { $0.id == capture.id })?.fingerprint)
+            }
+            return (changed, files)
+        } catch {
+            for file in files { try? FileManager.default.removeItem(at: file) }
+            throw error
+        }
+    }
+
+    func completedVerdict(forPhysicalIndex index: Int) -> ScreenVerdict? {
+        guard !completedScreens.isEmpty else { return verdict?.screens.first { $0.screenIndex == index } }
+        guard displayOrder.indices.contains(index - 1) else { return nil }
+        return completedScreens[displayOrder[index - 1]]?.verdict
+    }
+
+    private func publishAssessment(_ result: Verdict, captures: [CapturedScreen], at date: Date, sequence: Int) {
+        for (index, capture) in captures.enumerated() where latestRequestByDisplay[capture.id] == sequence {
+            let screen = result.screens.first { $0.screenIndex == index + 1 } ??
+                ScreenVerdict(screenIndex: index + 1, status: result.status, reason: result.reason)
+            completedScreens[capture.id] = (capture, screen, date, result.nextStep)
+        }
+        let ordered = displayOrder.compactMap { completedScreens[$0] }
+        guard !ordered.isEmpty else { return }
+        screenshots = ordered.map(\.capture)
+        assessmentTimes = Dictionary(uniqueKeysWithValues: ordered.map { ($0.capture.id, $0.date) })
+        lastCheck = ordered.map(\.date).max()
+        let screens = ordered.enumerated().map { index, item in
+            ScreenVerdict(screenIndex: index + 1, status: item.verdict.status, reason: item.verdict.reason,
+                          evidenceSource: item.verdict.evidenceSource)
+        }
+        let status = screens.contains { $0.status == "off_task" } ? "off_task" :
+            screens.contains { $0.status == "unsure" } ? "unsure" : screens.contains { $0.status == "on_task" } ? "on_task" : "unsure"
+        // Preserve the provider's coherent summary for a complete, current batch.
+        let completeBatch = captures.count == displayOrder.count && captures.count == ordered.count && captures.allSatisfy { latestRequestByDisplay[$0.id] == sequence }
+        verdict = completeBatch ? result : Verdict(status: status,
+            reason: ordered.map { item in "Screen \((displayOrder.firstIndex(of: item.capture.id) ?? 0) + 1): \(item.verdict.reason)" }.joined(separator: " "),
+            nextStep: ordered.first(where: { $0.verdict.status == "off_task" })?.nextStep ?? result.nextStep, screens: screens)
+    }
+
+    private func beginCheck(automatic: Bool, withCountdown: Bool, slot: Int = 0, changedOnly: Bool = false) {
+        guard !busySlots.contains(slot), let requestClient = slot == 0 ? client : secondaryClient else { return }
+        if slot == 1 && !secondaryReady { return }
+        busySlots.insert(slot)
         let sessionID = automatic ? session?.id : nil
         let taskGoal = classifierGoal(automatic: automatic)
         let model = selectedModel
@@ -501,23 +686,27 @@ import GatekeeperCore
         UserDefaults.standard.set(automatic ? (session?.goal ?? goal) : goal, forKey: "goal")
         UserDefaults.standard.set(model, forKey: "model")
         let trace = pendingSceneTrace ?? Diagnostics.Trace()
-        checkTask = Task {
+        let task = Task {
+            var sequence = 0
             var outcome = "abandoned"
             var imageFiles: [URL] = []
             var requestTrigger: CheckTrigger?
             var appName: String?
             defer {
                 Diagnostics.event("check_finished", trace: trace, details: "outcome=\(outcome)")
-                if activeAITrace?.id == trace.id {
-                    activeAITrace = nil; inFlightWindows = [:]; inFlightScreenCount = 0
-                }
+                slotTraces[slot] = nil
+                if slot == 0 { activeAITrace = nil; inFlightWindows = [:]; inFlightScreenCount = 0 }
                 for file in imageFiles { try? FileManager.default.removeItem(at: file) }
                 temporaryImages.removeAll { imageFiles.contains($0) }
-                checking = false; analysisInFlight = false; countdown = nil; stage = ""; checkTask = nil
-                if reconnectAfterCheck && !shuttingDown {
+                busySlots.remove(slot); inferenceSlots.remove(slot)
+                checking = !busySlots.isEmpty; analysisInFlight = !inferenceSlots.isEmpty
+                if slot == 0 { countdown = nil; checkTask = nil } else { secondaryCheckTask = nil }
+                if !checking { stage = "" }
+                if reconnectAfterCheck && busySlots.isEmpty && !shuttingDown {
                     reconnectAfterCheck = false
                     Task { await self.connect() }
                 }
+                if priorityPending && sessionIsCurrent(sessionID) { scheduleParallelCheck() }
             }
             do {
                 if !automatic {
@@ -532,7 +721,8 @@ import GatekeeperCore
                         if remaining == 3 && !automatic { hideForWork() }
                     }
                 }
-                countdown = nil; stage = "Comparing screens locally…"
+                if slot == 0 { countdown = nil }
+                if inferenceSlots.isEmpty { stage = "Comparing screens locally…" }
                 try Task.checkCancellation()
                 if automatic { guard sessionIsCurrent(sessionID) else { return } }
                 lastSampleAt = currentTime()
@@ -540,20 +730,35 @@ import GatekeeperCore
                 let capturedContext = contextRevision
                 let capturedScene = sceneRevision
                 let capturedVisual = visualRevision
+                let capturedPointerEpochs = pointerEpochs
                 let capturedAt = currentTime()
                 let capturedApplication = NSWorkspace.shared.frontmostApplication
                 let captureStart = ProcessInfo.processInfo.systemUptime
                 Diagnostics.event("capture_started", trace: trace)
-                let captures = try await captureScreens()
-                Diagnostics.event("capture_finished", trace: trace, details: "duration_ms=\(Int((ProcessInfo.processInfo.systemUptime - captureStart) * 1000)) screens=\(captures.count)")
-                imageFiles = captures.map(\.file)
-                temporaryImages = imageFiles
+                let allCaptures = try await captureScreens()
+                var captures = allCaptures
+                displayOrder = allCaptures.map(\.id)
+                Diagnostics.event("capture_finished", trace: trace, details: "duration_ms=\(Int((ProcessInfo.processInfo.systemUptime - captureStart) * 1000)) screens=\(allCaptures.count) slot=\(slot)")
+                imageFiles = allCaptures.map(\.file)
+                temporaryImages += imageFiles
                 try Task.checkCancellation()
                 if automatic { guard sessionIsCurrent(sessionID) else { return } }
+                if changedOnly {
+                    let selected = try await changedCaptures(allCaptures)
+                    imageFiles += selected.extraFiles; temporaryImages += selected.extraFiles
+                    try Task.checkCancellation()
+                    guard sessionIsCurrent(sessionID) else { return }
+                    captures = selected.captures
+                    guard !captures.isEmpty else {
+                        if capturedScene == sceneRevision && capturedVisual == visualRevision { priorityPending = false }
+                        outcome = "unchanged_or_cached"
+                        return
+                    }
+                }
                 let fingerprints = captures.map(\.fingerprint)
                 if automatic {
                     if interventionRules.invalidateChangedViews(fingerprints, contexts: windowContexts(captures), at: currentTime()) { correctionNote = nil }
-                    if !interventions.isEmpty {
+                    if !interventions.isEmpty && !changedOnly {
                         let remaining = try await retainedInterventions(current: fingerprints, contexts: windowContexts(captures))
                         try Task.checkCancellation()
                         guard sessionIsCurrent(sessionID) else { return }
@@ -562,26 +767,32 @@ import GatekeeperCore
                             policy.queue(.visualChange, at: currentTime())
                         }
                     }
-                    guard let trigger = policy.trigger(for: fingerprints, at: currentTime()) else {
+                    guard let trigger = changedOnly && !policy.isBackingOff(at: currentTime()) ? (policy.pendingTrigger ?? .viewChange) : policy.trigger(for: fingerprints, at: currentTime()) else {
                         session?.skippedSamples += 1
                         outcome = "local_skip"
                         return
                     }
                     requestTrigger = trigger
-                    viewProbeBaseline = fingerprints
+                    for capture in captures { submittedViews[capture.id] = (capture.fingerprint, capture.context, capturedPointerEpochs[capture.id, default: 0]) }
+                    viewProbeBaseline = displayOrder.compactMap { submittedViews[$0]?.fingerprint }
                     policy.beganRequest(at: currentTime())
                     session?.aiChecks += 1
                     persistSession()
                 } else { requestTrigger = .manual }
-                displayCount = captures.count
-                stage = "Checking all screens against your goal…"; analysisInFlight = true
-                inFlightWindows = windowContexts(captures)
-                inFlightScreenCount = captures.count
-                activeAITrace = trace
+                displayCount = allCaptures.count
+                stage = "Checking screens against your goal…"; inferenceSlots.insert(slot); analysisInFlight = true
+                if slot == 0 {
+                    inFlightWindows = windowContexts(captures); inFlightScreenCount = captures.count
+                    activeAITrace = trace
+                }
+                requestSequence += 1; sequence = requestSequence
+                for capture in captures { latestRequestByDisplay[capture.id] = sequence }
+                slotTraces[slot] = trace
+                if capturedScene == sceneRevision && capturedVisual == visualRevision { priorityPending = false }
                 if pendingSceneTrace?.id == trace.id { pendingSceneTrace = nil }
-                Diagnostics.event("ai_started", trace: trace, details: "trigger=\(requestTrigger?.rawValue ?? "unknown") screens=\(captures.count) model=\(model)")
+                Diagnostics.event("ai_started", trace: trace, details: "trigger=\(requestTrigger?.rawValue ?? "unknown") screens=\(captures.count) model=\(model) slot=\(slot) sequence=\(sequence) concurrent=\(inferenceSlots.count) displays=\(captures.map { String($0.id) }.joined(separator: ","))")
                 if !automatic { showWindow?() }
-                let result = try await client.analyse(goal: taskGoal, images: imageFiles, model: model)
+                let result = try await requestClient.analyse(goal: taskGoal, images: captures.map(\.file), model: model)
                 Diagnostics.event("ai_reply_received", trace: trace, details: "status=\(result.status)")
                 try Task.checkCancellation()
                 if automatic {
@@ -589,23 +800,35 @@ import GatekeeperCore
                     // A different monitor or title update cannot invalidate every
                     // screen. Each off-task screen is checked against fresh evidence below.
                 }
-                // Publish a complete assessment together. Refreshes never clear the last result.
-                screenshots = captures; lastCheck = capturedAt; verdict = result
+                let eligibleIDs = Set(captures.filter { latestRequestByDisplay[$0.id] == sequence }.map(\.id))
+                guard capturedContext == contextRevision, !eligibleIDs.isEmpty else {
+                    outcome = "superseded"
+                    Diagnostics.event("assessment_discarded", trace: trace, details: "reason=newer_request_or_display_mapping slot=\(slot)")
+                    return
+                }
+                publishAssessment(result, captures: captures, at: capturedAt, sequence: sequence)
                 interventionNote = nil
                 if automatic {
-                    policy.succeeded(with: fingerprints)
-                    recordEvent(kind: result.status, trigger: requestTrigger, app: appName,
-                                reason: result.reason, nextStep: result.nextStep)
+                    var baseline = Dictionary(uniqueKeysWithValues: (policy.baseline ?? []).map { ($0.displayID, $0) })
+                    for capture in captures where eligibleIDs.contains(capture.id) { baseline[capture.id] = capture.fingerprint }
+                    policy.succeeded(with: displayOrder.compactMap { baseline[$0] })
+                    recordEvent(kind: verdict?.status ?? result.status, trigger: requestTrigger, app: appName,
+                                reason: verdict?.reason ?? result.reason, nextStep: verdict?.nextStep ?? result.nextStep)
                     if result.status == "on_task", capturedContext == contextRevision,
                        capturedApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
                         lastOnTaskApplication = capturedApplication
                     }
                     Diagnostics.event("freshness_started", trace: trace)
-                    let candidates = try await currentInterventions(for: result, assessed: fingerprints,
+                    let assessedCandidates = try await currentInterventions(for: result, assessed: fingerprints,
                         assessedAt: capturedAt, capturedContext: capturedContext, assessedContexts: windowContexts(captures),
-                        assessedVisualRevision: capturedVisual, assessedSceneRevision: capturedScene)
+                        assessedVisualRevision: capturedVisual, assessedSceneRevision: capturedScene, assessedPointerEpochs: capturedPointerEpochs, trace: trace)
                     try Task.checkCancellation()
                     guard sessionIsCurrent(sessionID) else { return }
+                    let candidates = assessedCandidates.filter { latestRequestByDisplay[$0.id] == sequence }.map { candidate in
+                        InterventionCandidate(fingerprint: candidate.fingerprint,
+                            screenIndex: (displayOrder.firstIndex(of: candidate.id) ?? candidate.screenIndex - 1) + 1,
+                            reason: candidate.reason, context: candidate.context)
+                    }
                     let newIDs = Set(candidates.map(\.id)).subtracting(interventions.map(\.id))
                     Diagnostics.event("freshness_finished", trace: trace, details: "eligible_blurs=\(candidates.count)")
                     setInterventions(candidates, trace: trace)
@@ -628,13 +851,15 @@ import GatekeeperCore
                                     reason: "Check failed; this is not an off-task judgment. A retry is delayed by at least 30 seconds.")
                         if analysisInFlight {
                             reconnectAfterCheck = true
-                            client.stop(reason: "Reconnecting after a failed analysis.")
+                            requestClient.stop(reason: "Reconnecting after a failed analysis.")
+                            if slot == 1 { secondaryReady = false }
                         }
                     }
                 }
             }
             if !automatic { showWindow?() }
         }
+        if slot == 0 { checkTask = task } else { secondaryCheckTask = task }
     }
 
     func probeForViewChange() async {
@@ -651,8 +876,25 @@ import GatekeeperCore
             let second = try await captureScreens(); files += second.map(\.file)
             guard sessionIsCurrent(id), !Task.isCancelled, viewProbeBaseline == previous else { return }
             let followup = second.map(\.fingerprint)
-            viewProbeBaseline = followup
-            if ScreenComparison.substantialSettledChange(previous: previous, current: current, followup: followup) {
+            var ignoredScrollIDs: Set<UInt32> = []
+            let navigated = previous.filter { baseline in
+                guard let first = current.first(where: { $0.displayID == baseline.displayID }),
+                      let next = followup.first(where: { $0.displayID == baseline.displayID }),
+                      ScreenComparison.substantialSettledChange(previous: [baseline], current: [first], followup: [next]) else { return false }
+                if let submitted = submittedViews[baseline.displayID],
+                   scrollContinuesView(displayID: baseline.displayID, context: submitted.context, epoch: submitted.pointerEpoch) {
+                    ignoredScrollIDs.insert(baseline.displayID)
+                    Diagnostics.event("scroll_change_ignored", details: "display=\(baseline.displayID)")
+                    return false
+                }
+                return true
+            }
+            // Keep ignored pixels pending so an expired scroll hint cannot hide a
+            // later unknown view until the background interval.
+            viewProbeBaseline = followup.map { frame in
+                ignoredScrollIDs.contains(frame.displayID) ? previous.first(where: { $0.displayID == frame.displayID }) ?? frame : frame
+            }
+            if !navigated.isEmpty {
                 contextChanged(.viewChange)
                 Diagnostics.record("Settled visual view change queued for priority assessment")
             }
@@ -705,9 +947,14 @@ import GatekeeperCore
             sceneRevision += 1
             pendingSceneTrace = Diagnostics.Trace()
             Diagnostics.event("scene_detected", trace: pendingSceneTrace, details: "trigger=\(trigger.rawValue) scene_revision=\(sceneRevision)")
-            schedulePriorityInterrupt(force: trigger == .displayChange)
+            if secondaryClient == nil { schedulePriorityInterrupt(force: trigger == .displayChange) }
         }
-        if interventionRules.invalidateChangedWindows(pollWindowContexts()) { correctionNote = nil }
+        let contexts = pollWindowContexts()
+        for id in Set(inputContexts.keys).union(contexts.keys) where inputContexts[id] != contexts[id] {
+            pointerEpochs[id, default: 0] += 1; scrollHints[id] = nil
+        }
+        inputContexts = contexts
+        if interventionRules.invalidateChangedWindows(contexts) { correctionNote = nil }
         if trigger == .displayChange {
             contextRevision += 1
             interventionRules.reset()
@@ -718,6 +965,10 @@ import GatekeeperCore
         // A switch on another monitor does not invalidate unchanged off-task content.
         // Existing overlays are checked against fresh images on the next local sample.
         queueSessionCheck(trigger)
+        if secondaryClient != nil, session?.state == .running {
+            priorityPending = true
+            scheduleParallelCheck()
+        }
         if trigger == .spaceChange || trigger == .appSwitch || trigger == .navigation || trigger == .viewChange { scheduleCachedCheck() }
     }
 
@@ -803,13 +1054,13 @@ import GatekeeperCore
     }
 
     private func currentInterventions(for result: Verdict, assessed: [ScreenFingerprint], assessedAt: Date,
-                                     capturedContext: Int, assessedContexts: [UInt32: ScreenWindowContext], assessedVisualRevision: Int, assessedSceneRevision: Int) async throws -> [InterventionCandidate] {
+                                     capturedContext: Int, assessedContexts: [UInt32: ScreenWindowContext], assessedVisualRevision: Int, assessedSceneRevision: Int, assessedPointerEpochs: [UInt32: Int], trace: Diagnostics.Trace? = nil) async throws -> [InterventionCandidate] {
         guard result.screens.contains(where: { $0.status == "off_task" }) else { return [] }
         guard capturedContext == contextRevision, currentTime().timeIntervalSince(assessedAt) <= 20 else {
             queueSessionCheck(.visualChange)
             let reason = capturedContext != contextRevision ? "The display arrangement changed during analysis." : "The assessment was older than 20 seconds."
             recordEvent(kind: "rechecking", reason: reason + " Blur was withheld and a fresh check queued.")
-            Diagnostics.event("blur_withheld", trace: activeAITrace, details: "reason=\(capturedContext != contextRevision ? "display_change" : "result_age")")
+            Diagnostics.event("blur_withheld", trace: trace, details: "reason=\(capturedContext != contextRevision ? "display_change" : "result_age")")
             interventionNote = reason + " Rechecking before applying a blur."
             return []
         }
@@ -820,6 +1071,9 @@ import GatekeeperCore
             assessedContexts: assessedContexts, currentContexts: samples.2).filter { candidate in
                 guard assessedAt >= returnDeadlines[candidate.id, default: .distantPast] else { return false }
                 guard verifyChangedPixels else { return true }
+                if scrollContinuesView(displayID: candidate.id, context: assessedContexts[candidate.id],
+                                       epoch: assessedPointerEpochs[candidate.id, default: 0]),
+                   assessedContexts[candidate.id] == samples.2[candidate.id] { return true }
                 guard let evidence = assessed.first(where: { $0.displayID == candidate.id }),
                       let current = samples.0.first(where: { $0.displayID == candidate.id }) else { return false }
                 return SceneFreshness.matches(evidence, current: current,
@@ -840,7 +1094,7 @@ import GatekeeperCore
         }
         if !withheld.isEmpty {
             let description = withheld.joined(separator: "; ")
-            Diagnostics.event("blur_withheld", trace: activeAITrace, details: description)
+            Diagnostics.event("blur_withheld", trace: trace, details: description)
             recordEvent(kind: "rechecking", reason: "Blur withheld. " + description + ".")
             interventionNote = "Blur withheld. " + description + "."
         }
@@ -863,7 +1117,12 @@ import GatekeeperCore
     private func interruptCheck() {
         priorityInterruptTask?.cancel(); priorityInterruptTask = nil
         cachedCheckTask?.cancel(); cachedCheckTask = nil
-        checkTask?.cancel()
+        checkTask?.cancel(); secondaryCheckTask?.cancel()
+        priorityPending = false
+        if secondaryCheckTask != nil {
+            secondaryReady = false
+            secondaryClient?.stop(reason: "Screen check interrupted by session controls.")
+        }
         if analysisInFlight {
             reconnectAfterCheck = true
             client.stop(reason: "Screen check interrupted by session controls.")
@@ -970,8 +1229,10 @@ import GatekeeperCore
         UserDefaults.standard.set(goal, forKey: "goal")
         UserDefaults.standard.set(taskContext, forKey: "taskContext")
         if !selectedModel.isEmpty { UserDefaults.standard.set(selectedModel, forKey: "model") }
+        uninstallPointerMonitors()
         Diagnostics.record("App shutting down")
-        checkTask?.cancel(); client.stop()
+        checkTask?.cancel(); secondaryCheckTask?.cancel(); warmSecondaryTask?.cancel()
+        client.stop(); secondaryClient?.stop()
         for file in temporaryImages { try? FileManager.default.removeItem(at: file) }
         temporaryImages = []
         ScreenCapture.cleanupTemporaryCaptures()

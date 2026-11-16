@@ -496,14 +496,14 @@ struct ContentView: View {
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }.scrollIndicators(.hidden)
             }.frame(height: 132, alignment: .top)
-            Text(model.lastCheck.map { "Captured \($0.formatted(date: .omitted, time: .shortened)) · \(model.screenshots.count) screens" } ?? "Waiting for the first completed check")
+            Text(model.lastCheck.map { "Latest capture \($0.formatted(date: .omitted, time: .shortened)) · \(model.screenshots.count) screens" } ?? "Waiting for the first completed check")
                 .font(.system(size: 10)).foregroundStyle(.secondary).frame(height: 14, alignment: .leading)
             Text(model.correctionNote ?? model.interventionNote ?? "Screens are checked against your task context.")
                 .font(.system(size: 11)).foregroundStyle(model.correctionNote != nil ? green : model.interventionNote != nil ? Color.orange : Color.secondary)
                 .lineLimit(2).frame(height: 30, alignment: .topLeading)
             VStack(spacing: 9) {
                 ForEach(0..<max(model.displayCount, model.verdict?.screens.count ?? 0), id: \.self) { index in
-                    let screen = model.verdict?.screens.first { $0.screenIndex == index + 1 }
+                    let screen = model.completedVerdict(forPhysicalIndex: index + 1)
                     HStack {
                         Text("Screen \(index + 1)").fontWeight(.medium)
                         Spacer()
@@ -531,6 +531,10 @@ struct ContentView: View {
                             Spacer()
                             Text(screen?.status.replacingOccurrences(of: "_", with: " ").capitalized ?? "Unassessed")
                                 .font(.system(size: 11)).foregroundStyle(screen?.status == "off_task" ? Color.orange : green)
+                        }
+                        if let capturedAt = model.assessmentTimes[capture.id] {
+                            Text("Captured \(capturedAt.formatted(date: .omitted, time: .standard))")
+                                .font(.system(size: 10)).foregroundStyle(.secondary)
                         }
                         Image(nsImage: capture.image).resizable().aspectRatio(contentMode: .fit)
                             .frame(maxWidth: .infinity).frame(height: 230)

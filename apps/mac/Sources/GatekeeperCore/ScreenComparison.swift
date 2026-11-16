@@ -118,6 +118,8 @@ public struct MonitoringPolicy {
         retryAfter = now.addingTimeInterval(max(30, minimumGap))
     }
 
+    public func isBackingOff(at now: Date) -> Bool { retryAfter.map { now < $0 } ?? false }
+
     public var nextAllowedRequest: Date? {
         [lastRequest?.addingTimeInterval(requestGap), retryAfter, settleUntil].compactMap { $0 }.max()
     }

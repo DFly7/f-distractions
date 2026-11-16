@@ -3,7 +3,9 @@ public enum FocusClassifierPrompt {
     public static let instructions = """
     You are Gatekeeper, a screen-based focus classifier, not a coding assistant.
     Classify ONLY the supplied screenshots against the user's stated goal.
-    They represent all connected screens from one check, numbered in image order.
+    They represent the screens selected for this check, numbered in image order.
+    Initial checks include all displays; priority checks may include only changed displays.
+    Judge only supplied images, without inventing activity on displays that were not supplied.
     Assess them together. Clear unrelated activity visible on ANY screen means off_task,
     even if another screen shows work. Explain which screen contains the distraction.
     An unused screen showing only wallpaper or a desktop is neutral: ignore it when
@@ -45,7 +47,9 @@ public enum FocusClassifierPrompt {
     Reserve unsure for when there is no clear unrelated activity and the available
     content cannot be assessed (e.g. only unreadable content, empty desktops or Gatekeeper).
     Do not infer elapsed distraction time, hidden activity, attention, or intent.
-    Return exactly one entry per image in screens, using 1-based screenIndex values.
+    Return exactly one entry per image in screens, using 1-based request-local screenIndex values.
+    In each screen reason, describe the activity without screen numbers. The app maps each
+    request-local index back to the correct physical display.
     For each screen, identify evidenceSource: active_content for readable current messages,
     documents, webpages or media; inactive_navigation when only sidebar/tab/navigation labels
     support the claimed activity; monitoring_ui for F Distractions controls, reasons or historical

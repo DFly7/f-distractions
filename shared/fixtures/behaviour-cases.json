@@ -135,7 +135,7 @@
     "name": "superseded-inference",
     "given": "One AI request is in flight and a newer app/window/title is detected.",
     "when": "The newer scene settles.",
-    "then": "Cancel that superseded turn on the existing connection if supported. Pixel-only view changes queue priority work without cancelling; verify old pixels before allowing a new blur."
+    "then": "On Mac, keep the existing call running and use a free second slot for changed screens after local comparison. Retain one newest pending view when both slots are busy; older replies cannot publish or start blur for screens owned by a newer request."
   },
   {
     "name": "video-does-not-thrash-inference",
@@ -172,5 +172,23 @@
     "given": "A known cached distraction has video motion but matching stable content and window/title.",
     "when": "Two local frames confirm the moving region; or the user marks the view relevant.",
     "then": "Motion may be ignored for the match. A relevance correction removes matching cache entries so they cannot resurrect a false positive after approval expiry."
+  },
+  {
+    "name": "parallel-newest-view",
+    "given": "An initial all-screen check is still running on Mac.",
+    "when": "One display changes to an unfamiliar view.",
+    "then": "A free second slot can assess only that changed display after local comparison. At most two requests run; with both occupied, keep only the newest pending view."
+  },
+  {
+    "name": "parallel-out-of-order",
+    "given": "A changed display has a newer request while an older all-screen request remains in flight.",
+    "when": "Replies arrive in either order.",
+    "then": "Only the newest request may publish or initiate blur for that display. The old request may still update unaffected displays. Preserve existing latched blur."
+  },
+  {
+    "name": "scrolling-off-task-view",
+    "given": "An off-task assessment is in flight for a known window/title.",
+    "when": "Recent scroll events continue on that display without a click or metadata navigation since the capture.",
+    "then": "Scrolling alone cannot repeatedly supersede that assessment or veto blur. A click/window/title change invalidates the scroll hint; changed content still needs assessment."
   }
 ]
