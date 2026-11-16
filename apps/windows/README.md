@@ -30,7 +30,8 @@ The product rules are in [docs/behaviour.md](../../docs/behaviour.md). This app 
 | Timer expiry completes the session | Implemented. |
 | Disconnecting a monitor removes only its panels | Implemented; not yet tested with a real unplug. |
 | System tray icon; closing the window keeps the app running | Implemented. |
-| Task refinement, session history, settings, installer, Windows CI | Planned. |
+| Windows CI (build + unit tests, no live AI) | Implemented: `.github/workflows/windows.yml`. |
+| Task refinement, session history, settings, installer | Planned. |
 
 ## Setup (one time)
 
@@ -78,6 +79,8 @@ dotnet run --project src/FDistractions.App
 ```
 
 The unit tests need no screen, no sign-in and no AI. They read the synthetic fixtures in `shared/fixtures/`.
+
+The `Windows checks` GitHub Actions workflow (`.github/workflows/windows.yml`) runs the same build and tests on GitHub's Windows machines whenever `apps/windows/` or `shared/` changes.
 
 There is also one opt-in live test, which is skipped by default. It sends two **synthetic** images (never real screenshots) through your signed-in Claude Code and uses a little of your plan. Never enable it in CI. To run it, put `screen1.jpg` (an on-task page for "Write my history essay on the causes of the French Revolution") and `screen2.jpg` (an obviously unrelated page) in a folder outside the repo, then:
 
