@@ -20,6 +20,9 @@ import GatekeeperCore
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         client = SessionConnection(); clock = SessionClock()
         model = AppModel(client: client, sessionStore: SessionStore(file: directory.appendingPathComponent("sessions.json")))
+        // A clean CI runner has no saved task; never depend on local UserDefaults.
+        model.goal = "Write the project documentation"
+        model.taskContext = "Review the project and document its behaviour."
         model.runsSessionLoop = false
         model.pollWindowContexts = { [:] }
         model.permissionAvailable = { true }
