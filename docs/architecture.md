@@ -12,7 +12,7 @@ This is the lowest-disruption starting point for two contributors working on dif
 
 ## Boundaries
 
-- **Native integration:** screenshot capture, excluding the app's own windows, stable display mapping, foreground window changes, click-through blur and actionable overlay cards.
+- **Native integration:** screenshot capture, including normal app windows while excluding intervention panels, stable display mapping, foreground window changes, click-through blur and actionable overlay cards.
 - **Session policy:** explicit start/resume, frozen paused timer, request scheduling, in-flight cancellation, stale-result rejection, latched interventions and hold-to-exit.
 - **AI adapter:** the Mac app currently uses CodexClient through GatekeeperConnection. Provider-independent verdicts and task briefs are documented in shared/. A coding assistant used to develop the project does not choose the app's runtime AI provider.
 - **Local persistence:** existing Mac UserDefaults and Gatekeeper session history remain unchanged. There is no cross-device account, sync service or portable session-file guarantee.

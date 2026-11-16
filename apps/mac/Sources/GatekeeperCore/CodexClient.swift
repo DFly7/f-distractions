@@ -17,11 +17,20 @@ public struct GatekeeperError: LocalizedError {
     }
 }
 
+public enum ScreenEvidenceSource: String, Codable, CaseIterable {
+    case activeContent = "active_content"
+    case inactiveNavigation = "inactive_navigation"
+    case monitoringUI = "monitoring_ui"
+    case unreadable = "unreadable"
+}
+
 public struct ScreenVerdict: Codable, Equatable {
     public let screenIndex: Int
+    public let evidenceSource: ScreenEvidenceSource
     public let status: String
     public let reason: String
-    public init(screenIndex: Int, status: String, reason: String) {
+    public init(screenIndex: Int, status: String, reason: String, evidenceSource: ScreenEvidenceSource = .activeContent) {
+        self.evidenceSource = evidenceSource
         self.screenIndex = screenIndex; self.status = status; self.reason = reason
     }
 }
@@ -47,6 +56,9 @@ public struct Verdict: Codable {
               Set(screens.map(\.screenIndex)) == Set(1...screenCount),
               screens.allSatisfy({ ["on_task", "off_task", "unsure", "neutral"].contains($0.status) }) else {
             throw GatekeeperError("The model didn’t assess every screen correctly. Try another check.")
+        }
+        guard screens.allSatisfy({ $0.status != "off_task" || $0.evidenceSource == .activeContent }) else {
+            throw GatekeeperError("The model cited inactive navigation, monitoring UI or unreadable content as a distraction. No new blur was applied; checking again later.")
         }
         let expected = screens.contains { $0.status == "off_task" } ? "off_task" :
             screens.contains { $0.status == "unsure" } ? "unsure" :
@@ -237,9 +249,10 @@ public struct CodexModel: Identifiable {
         let screenSchema: [String: Any] = [
             "type": "object", "additionalProperties": false,
             "properties": ["screenIndex": ["type": "integer", "minimum": 1, "maximum": images.count],
+                           "evidenceSource": ["type": "string", "enum": ScreenEvidenceSource.allCases.map(\.rawValue)],
                            "status": ["type": "string", "enum": ["on_task", "off_task", "unsure", "neutral"]],
                            "reason": ["type": "string"]],
-            "required": ["screenIndex", "status", "reason"]
+            "required": ["screenIndex", "evidenceSource", "status", "reason"]
         ]
         let schema: [String: Any] = [
             "type": "object", "additionalProperties": false,

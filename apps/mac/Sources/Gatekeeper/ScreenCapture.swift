@@ -12,11 +12,14 @@ struct CapturedScreen: Identifiable {
 }
 
 @MainActor enum ScreenCapture {
+    // Exclude interventions, including fading-out panels, rather than the entire app.
+    static var overlayWindowIDs: () -> Set<CGWindowID> = { [] }
+
     static func currentWindowContexts() -> [UInt32: ScreenWindowContext] {
         let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
         return Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { screen in
             guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value,
-                  let context = windowContext(on: CGDisplayBounds(id), windows: windows) else { return nil }
+                  let context = windowContext(on: CGDisplayBounds(id), windows: windows, excluding: overlayWindowIDs()) else { return nil }
             return (id, context)
         })
     }
@@ -38,7 +41,8 @@ struct CapturedScreen: Identifiable {
             return $0.displayID < $1.displayID
         }
         guard !displays.isEmpty else { throw GatekeeperError("No displays are available to capture. Reconnect your display and try again.") }
-        let ownApps = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+        let excludedIDs = overlayWindowIDs()
+        let overlays = content.windows.filter { excludedIDs.contains($0.windowID) }
         let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
         var captures: [CapturedScreen] = []
         do {
@@ -48,8 +52,8 @@ struct CapturedScreen: Identifiable {
                     ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.displayID
                 }
                 let name = screen?.localizedName ?? "Display \(display.displayID)"
-                let (image, file, fingerprint) = try await capture(display: display, excluding: ownApps)
-                let context = windowContext(on: display.frame, windows: windows)
+                let (image, file, fingerprint) = try await capture(display: display, excluding: overlays)
+                let context = windowContext(on: display.frame, windows: windows, excluding: excludedIDs)
                 captures.append(CapturedScreen(id: display.displayID, label: "Screen \(index + 1) · \(name)", image: image, file: file, fingerprint: fingerprint, context: context))
             }
             try Task.checkCancellation()
@@ -60,11 +64,12 @@ struct CapturedScreen: Identifiable {
         }
     }
 
-    private static func windowContext(on display: CGRect, windows: [[String: Any]]) -> ScreenWindowContext? {
+    static func windowContext(on display: CGRect, windows: [[String: Any]], excluding excludedIDs: Set<CGWindowID> = []) -> ScreenWindowContext? {
         for window in windows {
-            guard let layer = window[kCGWindowLayer as String] as? Int, layer == 0,
-                  let pid = window[kCGWindowOwnerPID as String] as? Int32, pid != ProcessInfo.processInfo.processIdentifier,
-                  let id = window[kCGWindowNumber as String] as? UInt32,
+            guard let layer = window[kCGWindowLayer as String] as? Int,
+                  let pid = window[kCGWindowOwnerPID as String] as? Int32,
+                  let id = window[kCGWindowNumber as String] as? UInt32, !excludedIDs.contains(id),
+                  layer == 0 || pid == ProcessInfo.processInfo.processIdentifier,
                   let bounds = window[kCGWindowBounds as String] as? [String: Any],
                   let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { continue }
             let visible = frame.intersection(display)
@@ -77,8 +82,8 @@ struct CapturedScreen: Identifiable {
         return nil
     }
 
-    private static func capture(display: SCDisplay, excluding ownApps: [SCRunningApplication]) async throws -> (NSImage, URL, ScreenFingerprint) {
-        let filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
+    private static func capture(display: SCDisplay, excluding overlays: [SCWindow]) async throws -> (NSImage, URL, ScreenFingerprint) {
+        let filter = SCContentFilter(display: display, excludingWindows: overlays)
         let config = SCStreamConfiguration()
         let scale = min(1.0, 1600.0 / Double(max(display.width, display.height)))
         config.width = max(1, Int(Double(display.width) * scale))

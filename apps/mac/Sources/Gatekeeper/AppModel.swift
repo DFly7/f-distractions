@@ -149,9 +149,9 @@ import GatekeeperCore
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                  app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+                  !app.isTerminated else { return }
             Task { @MainActor in
-                self?.previousApplication = app
+                if app.processIdentifier != ProcessInfo.processInfo.processIdentifier { self?.previousApplication = app }
                 self?.contextChanged(.appSwitch)
             }
         }

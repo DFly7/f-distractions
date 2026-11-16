@@ -30,6 +30,7 @@ import GatekeeperCore
         window.titlebarAppearsTransparent = true
         window.contentView = NSHostingView(rootView: ContentView(model: model))
         window.center()
+        ScreenCapture.overlayWindowIDs = { [weak self] in self?.overlays.captureExcludedWindowIDs ?? [] }
         model.showWindow = { [weak self] in self?.show() }
         model.onInterventionsChanged = { [weak self] candidates in
             guard let self else { return }
@@ -131,6 +132,14 @@ import GatekeeperCore
             }
         }
         if CommandLine.arguments.contains("--overlay-smoke-test") { runOverlaySmokeTest() }
+        if CommandLine.arguments.contains("--capture-filter-smoke-test") {
+            Task {
+                do {
+                    try await CaptureFilterSmokeTest.run()
+                    Diagnostics.record("Capture filter smoke test passed: main window included, overlay excluded")
+                } catch { Diagnostics.failure("Capture filter smoke test", error) }
+            }
+        }
         if CommandLine.arguments.contains("--capture-context-test") {
             Task {
                 do {

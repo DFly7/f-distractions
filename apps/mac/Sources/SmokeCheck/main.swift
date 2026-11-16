@@ -22,6 +22,14 @@ import GatekeeperCore
                 model = selected
             } else { model = models.first(where: \.isDefault) ?? models[0] }
             print("PASS: model catalogue loaded; selected \(model.id)")
+            if CommandLine.arguments.contains("--focus-ui-fixture") {
+                let url = try fixture("F Distractions\nFocus session: Write the chatbot report\nTimer: 34:20 remaining\n\nLAST COMPLETED CHECK — HISTORICAL SCREENSHOT PREVIEW\nCaptured earlier: AI conversation about planning a holiday\nPrevious reason: This holiday discussion was unrelated.\n\nReturn to work | This is relevant | View screenshots & reasons")
+                defer { try? FileManager.default.removeItem(at: url) }
+                let result = try await client.analyse(goal: "Write the chatbot coursework report.", image: url, model: model.id)
+                guard result.status == "unsure" else { throw GatekeeperError("Focus UI fixture expected unsure, got \(result.status): \(result.reason)") }
+                print("PASS: monitoring UI and historical preview classified unsure: \(result.reason)")
+                client.stop(); return
+            }
             if CommandLine.arguments.contains("--conversation-fixture") {
                 var files: [URL] = []
                 defer { for file in files { try? FileManager.default.removeItem(at: file) } }

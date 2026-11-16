@@ -14,6 +14,11 @@ import GatekeeperCore
     var onRelevant: ((UInt32) -> Void)?
     var onBreak: (() -> Void)?
     private let presentsWindows: Bool
+    var captureExcludedWindowIDs: Set<CGWindowID> {
+        Set((Array(panels.values) + Array(retiring.values)).flatMap {
+            [$0.blur, $0.card].compactMap { $0.windowNumber > 0 ? CGWindowID($0.windowNumber) : nil }
+        })
+    }
     var activeDisplayIDs: Set<UInt32> { Set(panels.keys) }
     var visiblePanelCount: Int { panels.values.reduce(0) { $0 + ($1.blur.isVisible ? 1 : 0) + ($1.card.isVisible ? 1 : 0) } }
 

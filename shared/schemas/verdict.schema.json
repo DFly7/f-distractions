@@ -40,10 +40,20 @@
           },
           "reason": {
             "type": "string"
+          },
+          "evidenceSource": {
+            "type": "string",
+            "enum": [
+              "active_content",
+              "inactive_navigation",
+              "monitoring_ui",
+              "unreadable"
+            ]
           }
         },
         "required": [
           "screenIndex",
+          "evidenceSource",
           "status",
           "reason"
         ]

@@ -14,6 +14,8 @@ The Mac implementation currently embeds its schemas/prompts in Swift and does no
 
 Bind each request to its screenshot count N and its captured physical-display mapping. Require exactly N screen entries and the unique indices 1 through N (response order is not meaningful). The model-request schema additionally sets each index maximum and the array length to N. The static schema here cannot encode N.
 
+Each screen also requires `evidenceSource`: `active_content`, `inactive_navigation`, `monitoring_ui`, or `unreadable`. Reject an off_task verdict unless its evidenceSource is active_content. Missing or unknown evidence sources fail decoding; inactive labels, historical previews and unreadable content cannot initiate blur. This is a semantic gate, not proof that the model has correctly identified what pixels show. Existing locked blur is unaffected by validation failures.
+
 Compute the aggregate status: any off_task → off_task; else any unsure → unsure; else any on_task → on_task; else unsure. Reject inconsistent responses. `neutral` is valid only on individual screens. Never use an unvalidated index to choose a physical display, and never turn malformed output into an off-task verdict.
 
 The examples contain fake text, no real screen captures or personal session history. Implementations should use the same validation cases in their native test suites. Behaviour changes require agreeing the contract and updating docs plus fixtures in the same PR.

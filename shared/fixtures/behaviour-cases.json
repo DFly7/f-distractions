@@ -94,5 +94,23 @@
     "given": "The task is HCI chatbot coursework; a relevant conversation is in the foreground.",
     "when": "A separate visible pane or another screen displays an unrelated social feed or unrelated AI conversation.",
     "then": "off_task for the screen showing substantive unrelated content, even if it lacks keyboard focus."
+  },
+  {
+    "name": "capture-main-app",
+    "given": "F Distractions is in front of a browser. Its blur/card panels may also be visible.",
+    "when": "Capture all screens.",
+    "then": "Include the normal app window and dialogs; exclude only intervention panels, including fading-out ones. Do not reveal content hidden behind the normal app window."
+  },
+  {
+    "name": "historical-preview-not-live-activity",
+    "given": "The only assessable window is F Distractions showing an old off-task screenshot and reason in its assessment UI.",
+    "when": "Classify this screen.",
+    "then": "unsure: the historical preview and quoted reason do not prove that unrelated activity is occurring now; do not initiate blur from them."
+  },
+  {
+    "name": "reject-inactive-off-task-evidence",
+    "given": "The model responds off_task with evidenceSource inactive_navigation, monitoring_ui or unreadable.",
+    "when": "Validate the assessment.",
+    "then": "Reject the response as an error: do not create a new blur and do not dismiss an already locked blur."
   }
 ]

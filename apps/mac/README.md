@@ -51,7 +51,7 @@ The blur grows inward from all four edges over 1.4 seconds. Its background is cl
 - **This is relevant** immediately removes that screen’s overlay and records a correction. The current view is exempt for up to two minutes. This is a local view-scoped exception, not a permanent site/app whitelist or model retraining. It ends on an app/display switch or sufficiently changed scene; expiry queues reassessment.
 - **Take a break** opens the ten-second hold confirmation. After completing the hold, overlays are removed and monitoring and the timer pause. Resuming is explicit.
 
-Once shown, a blur stays locked until an explicit **Return to work**, **This is relevant**, or confirmed **Take a break** action, or the session ends. Background changes, fresh on-task/neutral verdicts, and check errors do not silently clear it. Disconnected displays are removed; remaining connected screens keep their blur. Return to work still lifts only the clicked screen for three seconds before the normal recheck/cache policy can reapply it. Opening the main app keeps session controls above the blur. Gatekeeper’s own windows remain excluded from screenshots.
+Once shown, a blur stays locked until an explicit **Return to work**, **This is relevant**, or confirmed **Take a break** action, or the session ends. Background changes, fresh on-task/neutral verdicts, and check errors do not silently clear it. Disconnected displays are removed; remaining connected screens keep their blur. Return to work still lifts only the clicked screen for three seconds before the normal recheck/cache policy can reapply it. Opening the main app keeps session controls above the blur. Only intervention blur/card windows remain excluded from screenshots; normal app windows and dialogs are included.
 
 The full-width **View screenshots & reasons** row expands the latest completed assessment into per-screen images, verdicts and reasons.
 
@@ -72,7 +72,7 @@ Pre-intervention freshness samples are local and do not cause additional model c
 
 ## Data
 
-Screen Recording permission is required. Every connected display is included at capture time, excluding Gatekeeper’s own windows. Captures happen in a short sequence, not simultaneously. If one display fails, partial files are deleted and the check fails instead of silently evaluating only some screens.
+Screen Recording permission is required. Every connected display is included at capture time, including the normal app window and dialogs, and excluding only its intervention blur/card windows. Captures happen in a short sequence, not simultaneously. If one display fails, partial files are deleted and the check fails instead of silently evaluating only some screens.
 
 Full screenshots are temporary files private to the user, deleted after comparison-only skips, success, failure or cancellation. Only the latest analysed previews remain in memory until cleared/replaced or the app quits. A crash can leave files in the macOS temporary directory. There is no audio capture or webcam use. Window IDs and title hashes stay in memory; raw window titles are neither saved nor separately sent to the model.
 
@@ -92,6 +92,7 @@ swift run SmokeCheck --settings-fixture
 swift run SmokeCheck --multi-screen-fixture
 swift run SmokeCheck --task-brief-fixture
 swift run SmokeCheck --conversation-fixture --model gpt-6-luna
+swift run SmokeCheck --focus-ui-fixture --model gpt-6-luna
 ```
 
 Unit tests cover grayscale fingerprints, image changes across displays, accumulated changes, app-switch settling, cooldowns, error backoff, queued events during inference, timed session expiry, pause/resume, non-overlapping requests, late-result rejection, temporary-file cleanup, persisted summaries, interrupted-session recovery and abandoned sign-in recovery. Intervention tests additionally cover physical screen targeting, structured verdict validation, stale results, moving-content tolerance, scoped correction expiry, return/break actions, overlay removal on lifecycle changes, native panel ordering and click-through behavior. They use an injected clock, synthetic captures and a fake Codex connection; panel tests construct native windows without displaying them.
@@ -111,3 +112,11 @@ The classifier uses structured output and read-only ephemeral Codex threads, wit
 The build script selects the first Apple Development signing identity. Pin a consistent one with `GATEKEEPER_SIGNING_IDENTITY`. It rejects ad-hoc signatures and refuses to replace a running app. A stable certificate-based designated requirement keeps macOS permission grants consistent across builds.
 
 Old ad-hoc builds left stale permission records. Only when migrating from those builds: quit Gatekeeper, run `tccutil reset ScreenCapture dev.gatekeeper.poc`, open the signed build and approve it once. Do not reset permissions for other apps. Normal rebuilds with the same identity do not require a reset. Public distribution needs appropriate signing/notarization and confirmation of commercial subscription integration eligibility.
+
+For the local capture-filter integration check, quit the app and launch:
+
+```sh
+open "dist/F Distractions.app" --args --capture-filter-smoke-test
+```
+
+This briefly shows synthetic blue/red windows, captures locally and checks that the blue normal window is included while the red overlay is excluded. It deletes all capture files and does not send an AI request. The diagnostic log records pass/fail.
