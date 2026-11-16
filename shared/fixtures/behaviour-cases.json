@@ -160,5 +160,17 @@
     "given": "The first request is running.",
     "when": "A settled pixel-only update occurs without app/window/title navigation.",
     "then": "Do not cancel and restart the request. Queue the next view, and apply no new blur unless fresh samples still match the assessed content."
+  },
+  {
+    "name": "space-cache-known-view",
+    "given": "A view was confirmed off-task in the same session less than ten minutes ago.",
+    "when": "Swipe to another desktop where its matching display, window/title and stable content are visible.",
+    "then": "Space notification checks the local cache after settling. A match can blur without a fresh AI request; unfamiliar views remain unblocked pending assessment."
+  },
+  {
+    "name": "cache-motion-and-correction",
+    "given": "A known cached distraction has video motion but matching stable content and window/title.",
+    "when": "Two local frames confirm the moving region; or the user marks the view relevant.",
+    "then": "Motion may be ignored for the match. A relevance correction removes matching cache entries so they cannot resurrect a false positive after approval expiry."
   }
 ]

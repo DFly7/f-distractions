@@ -61,16 +61,20 @@ public struct InterventionRules {
         for candidate in candidates {
             recent.removeAll { $0.candidate.id == candidate.id && $0.candidate.context == candidate.context &&
                 !ScreenComparison.changed([$0.candidate.fingerprint], since: [candidate.fingerprint]) }
-            recent.insert((candidate, now.addingTimeInterval(120)), at: 0)
+            recent.insert((candidate, now.addingTimeInterval(600)), at: 0)
         }
-        recent = Array(recent.prefix(20))
+        recent = Array(recent.prefix(40))
     }
-    public func recalled(current: [ScreenFingerprint], contexts: [UInt32: ScreenWindowContext], at now: Date) -> [InterventionCandidate] {
+    public func hasMatchingContext(_ contexts: [UInt32: ScreenWindowContext], at now: Date) -> Bool {
+        recent.contains { now < $0.expiresAt && $0.candidate.context != nil && $0.candidate.context == contexts[$0.candidate.id] }
+    }
+    public func recalled(current: [ScreenFingerprint], followup: [ScreenFingerprint] = [], contexts: [UInt32: ScreenWindowContext], at now: Date) -> [InterventionCandidate] {
         current.compactMap { screen in
-            guard !isApproved(screen, context: contexts[screen.displayID], at: now), let match = recent.first(where: {
+            let next = followup.first { $0.displayID == screen.displayID }
+            guard !isApproved(screen, followup: next, context: contexts[screen.displayID], at: now), let match = recent.first(where: {
                 now < $0.expiresAt && $0.candidate.id == screen.displayID && $0.candidate.context != nil &&
                 $0.candidate.context == contexts[screen.displayID] &&
-                !ScreenComparison.changed([screen], since: [$0.candidate.fingerprint])
+                SceneFreshness.matches($0.candidate.fingerprint, current: screen, followup: next)
             }) else { return nil }
             return InterventionCandidate(fingerprint: screen, screenIndex: current.firstIndex(where: { $0.displayID == screen.displayID })! + 1,
                 reason: match.candidate.reason, context: match.candidate.context)
@@ -82,6 +86,9 @@ public struct InterventionRules {
         return !expired.isEmpty
     }
     public mutating func approve(_ fingerprint: ScreenFingerprint, context: ScreenWindowContext? = nil, at now: Date) {
+        // A corrected false positive must not be resurrected by the distraction cache.
+        recent.removeAll { $0.candidate.id == fingerprint.displayID &&
+            (context == nil || $0.candidate.context == context) }
         approvals[fingerprint.displayID] = Approval(fingerprint: fingerprint, context: context, expiresAt: now.addingTimeInterval(120))
     }
     public func isApproved(_ current: ScreenFingerprint, followup: ScreenFingerprint? = nil, context: ScreenWindowContext? = nil, at now: Date) -> Bool {

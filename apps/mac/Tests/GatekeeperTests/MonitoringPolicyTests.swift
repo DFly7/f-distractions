@@ -92,6 +92,14 @@ final class MonitoringPolicyTests: XCTestCase {
         XCTAssertEqual(policy.trigger(for: [screen(220)], at: now.addingTimeInterval(3)), .viewChange)
     }
 
+    func testSpaceChangeSettlesAndBypassesBackgroundGap() {
+        var policy = MonitoringPolicy(minimumGap: 60)
+        policy.beganRequest(at: now); policy.succeeded(with: [screen()])
+        policy.queue(.spaceChange, at: now.addingTimeInterval(4))
+        XCTAssertNil(policy.trigger(for: [screen()], at: now.addingTimeInterval(4.2)))
+        XCTAssertEqual(policy.trigger(for: [screen()], at: now.addingTimeInterval(4.4)), .spaceChange)
+    }
+
     func testFailedChecksBackOffAndKeepLastSuccessfulBaseline() {
         var policy = MonitoringPolicy(minimumGap: 15)
         policy.beganRequest(at: now); policy.succeeded(with: [screen()])

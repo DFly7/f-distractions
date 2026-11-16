@@ -67,6 +67,7 @@ public enum ScreenComparison {
 
 public enum CheckTrigger: String, Codable {
     case initial = "Session started"
+    case spaceChange = "Desktop changed"
     case appSwitch = "App switched"
     case navigation = "Window/tab changed"
     case viewChange = "View content changed"
@@ -87,10 +88,10 @@ public struct MonitoringPolicy {
     public init(minimumGap: TimeInterval) { self.minimumGap = max(1, minimumGap) }
 
     public mutating func queue(_ trigger: CheckTrigger, at now: Date) {
-        let existingIsPriority = pendingTrigger == .appSwitch || pendingTrigger == .navigation || pendingTrigger == .viewChange || pendingTrigger == .displayChange || pendingTrigger == .manual
-        let incomingIsPriority = trigger == .appSwitch || trigger == .navigation || trigger == .viewChange || trigger == .displayChange || trigger == .manual
+        let existingIsPriority = pendingTrigger == .spaceChange || pendingTrigger == .appSwitch || pendingTrigger == .navigation || pendingTrigger == .viewChange || pendingTrigger == .displayChange || pendingTrigger == .manual
+        let incomingIsPriority = trigger == .spaceChange || trigger == .appSwitch || trigger == .navigation || trigger == .viewChange || trigger == .displayChange || trigger == .manual
         if (baseline != nil || pendingTrigger != .initial) && (!existingIsPriority || incomingIsPriority) { pendingTrigger = trigger }
-        if trigger == .appSwitch || trigger == .navigation || trigger == .viewChange || trigger == .displayChange { settleUntil = now.addingTimeInterval(0.35) }
+        if trigger == .spaceChange || trigger == .appSwitch || trigger == .navigation || trigger == .viewChange || trigger == .displayChange { settleUntil = now.addingTimeInterval(0.35) }
     }
 
     public func trigger(for screens: [ScreenFingerprint], at now: Date) -> CheckTrigger? {
@@ -118,7 +119,7 @@ public struct MonitoringPolicy {
 
     private var requestGap: TimeInterval {
         switch pendingTrigger {
-        case .appSwitch, .navigation, .viewChange, .displayChange, .manual: return min(3, minimumGap)
+        case .spaceChange, .appSwitch, .navigation, .viewChange, .displayChange, .manual: return min(3, minimumGap)
         default: return minimumGap
         }
     }

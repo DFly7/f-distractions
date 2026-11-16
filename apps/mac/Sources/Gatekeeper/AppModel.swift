@@ -103,6 +103,8 @@ import GatekeeperCore
     var openSignInURL: (URL) -> Bool = { NSWorkspace.shared.open($0) }
     private(set) var checkTask: Task<Void, Never>?
     private var previousApplication: NSRunningApplication?
+    private var spaceObserver: NSObjectProtocol?
+    private var interruptScheduleID: UUID?
     private var workspaceObserver: NSObjectProtocol?
     private var activationObserver: NSObjectProtocol?
     private var displayObserver: NSObjectProtocol?
@@ -160,6 +162,11 @@ import GatekeeperCore
                 if app.processIdentifier != ProcessInfo.processInfo.processIdentifier { self?.previousApplication = app }
                 self?.contextChanged(.appSwitch)
             }
+        }
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.contextChanged(.spaceChange) }
         }
         for notification in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification,
                              NSWorkspace.sessionDidResignActiveNotification] {
@@ -306,7 +313,19 @@ import GatekeeperCore
                     if let context = candidate.context { return context == contexts[candidate.id] }
                     return false
                 }
-                let recalled = interventionRules.recalled(current: captures.map(\.fingerprint), contexts: contexts, at: currentTime())
+                var recalled = interventionRules.recalled(current: captures.map(\.fingerprint), contexts: contexts, at: currentTime())
+                if recalled.isEmpty, interventionRules.hasMatchingContext(contexts, at: currentTime()) {
+                    try await freshnessDelay()
+                    let next = try await captureScreens()
+                    files += next.map(\.file); temporaryImages += next.map(\.file)
+                    try Task.checkCancellation()
+                    guard sessionIsCurrent(id), contextRevision == revision else { return }
+                    let nextContexts = windowContexts(next)
+                    // Never compare motion across a window/tab change.
+                    if nextContexts == contexts {
+                        recalled = interventionRules.recalled(current: captures.map(\.fingerprint), followup: next.map(\.fingerprint), contexts: contexts, at: currentTime())
+                    }
+                }
                 let recalledIDs = Set(recalled.map(\.id))
                 retained.removeAll { recalledIDs.contains($0.id) }
                 let newIDs = recalledIDs.subtracting(interventions.map(\.id))
@@ -389,7 +408,7 @@ import GatekeeperCore
         }
         // During a request cooldown, another screenshot cannot trigger inference anyway.
         if interventions.isEmpty, let next = policy.nextAllowedRequest, now < next { return }
-        let priorityPending = policy.pendingTrigger == .appSwitch || policy.pendingTrigger == .navigation || policy.pendingTrigger == .viewChange || policy.pendingTrigger == .displayChange || policy.pendingTrigger == .manual
+        let priorityPending = policy.pendingTrigger == .spaceChange || policy.pendingTrigger == .appSwitch || policy.pendingTrigger == .navigation || policy.pendingTrigger == .viewChange || policy.pendingTrigger == .displayChange || policy.pendingTrigger == .manual
         if !priorityPending, let lastSampleAt, now.timeIntervalSince(lastSampleAt) < (interventions.isEmpty ? 5 : 2) { return }
         beginCheck(automatic: true, withCountdown: false)
     }
@@ -599,20 +618,24 @@ import GatekeeperCore
     }
 
     private func schedulePriorityInterrupt() {
-        guard analysisInFlight, priorityInterruptTask == nil else { return }
+        guard analysisInFlight else { return }
+        priorityInterruptTask?.cancel()
+        let scheduleID = UUID(); interruptScheduleID = scheduleID
         let task = checkTask
         priorityInterruptTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.priorityInterruptTask = nil }
+            defer {
+                if self.interruptScheduleID == scheduleID { self.priorityInterruptTask = nil; self.interruptScheduleID = nil }
+            }
             do { try await self.prioritySettleDelay() } catch { return }
-            guard self.analysisInFlight, self.session?.state == .running else { return }
+            guard !Task.isCancelled, self.interruptScheduleID == scheduleID, self.analysisInFlight, self.session?.state == .running else { return }
             if await self.client.interruptAnalysis() { task?.cancel() }
         }
     }
 
     func contextChanged(_ trigger: CheckTrigger) {
         if trigger == .viewChange { visualRevision += 1 }
-        if trigger == .appSwitch || trigger == .navigation || trigger == .displayChange {
+        if trigger == .spaceChange || trigger == .appSwitch || trigger == .navigation || trigger == .displayChange {
             sceneRevision += 1
             Diagnostics.record("Priority scene change detected: trigger=\(trigger.rawValue)")
             schedulePriorityInterrupt()
@@ -628,7 +651,7 @@ import GatekeeperCore
         // A switch on another monitor does not invalidate unchanged off-task content.
         // Existing overlays are checked against fresh images on the next local sample.
         queueSessionCheck(trigger)
-        if trigger == .appSwitch || trigger == .navigation || trigger == .viewChange { scheduleCachedCheck() }
+        if trigger == .spaceChange || trigger == .appSwitch || trigger == .navigation || trigger == .viewChange { scheduleCachedCheck() }
     }
 
     func returnToWork(displayID: UInt32) {

@@ -88,6 +88,33 @@ final class InterventionRulesTests: XCTestCase {
         XCTAssertFalse(rules.isApproved(image(), context: context, at: now.addingTimeInterval(2)))
     }
 
+    func testCacheMatchesMovingContentForTenMinutesButNotNewTabsOrStableContent() {
+        var rules = InterventionRules()
+        let evidence = image()
+        let context = ScreenWindowContext(windowID: 10, processID: 77, navigationToken: 1)
+        rules.remember([InterventionCandidate(fingerprint: evidence, screenIndex: 1, reason: "Known distraction", context: context)], at: now)
+        var a = evidence.pixels, b = evidence.pixels
+        for i in 300..<a.count { a[i] = 200; b[i] = 50 }
+        func frame(_ pixels: [UInt8]) -> ScreenFingerprint {
+            ScreenFingerprint(displayID: 1, sourceWidth: 1600, sourceHeight: 900, pixels: pixels)
+        }
+        XCTAssertTrue(rules.recalled(current: [frame(a)], contexts: [1: context], at: now.addingTimeInterval(300)).isEmpty)
+        XCTAssertEqual(rules.recalled(current: [frame(a)], followup: [frame(b)], contexts: [1: context], at: now.addingTimeInterval(300)).count, 1)
+        let newTab = ScreenWindowContext(windowID: 10, processID: 77, navigationToken: 2)
+        XCTAssertTrue(rules.recalled(current: [frame(a)], followup: [frame(b)], contexts: [1: newTab], at: now.addingTimeInterval(301)).isEmpty)
+        for i in 0..<100 { a[i] = 240; b[i] = 240 }
+        XCTAssertTrue(rules.recalled(current: [frame(a)], followup: [frame(b)], contexts: [1: context], at: now.addingTimeInterval(302)).isEmpty)
+        XCTAssertTrue(rules.recalled(current: [evidence], contexts: [1: context], at: now.addingTimeInterval(600)).isEmpty)
+    }
+
+    func testRelevanceCorrectionRemovesCachedFalsePositiveBeyondApprovalExpiry() {
+        var rules = InterventionRules()
+        let context = ScreenWindowContext(windowID: 10, processID: 77)
+        rules.remember([InterventionCandidate(fingerprint: image(), screenIndex: 1, reason: "Incorrect", context: context)], at: now)
+        rules.approve(image(), context: context, at: now)
+        XCTAssertTrue(rules.recalled(current: [image()], contexts: [1: context], at: now.addingTimeInterval(121)).isEmpty)
+    }
+
     func testVideoMotionCanChangeWhileStablePageChromeRemainsTheSame() {
         let evidence = image()
         var a = evidence.pixels, b = evidence.pixels

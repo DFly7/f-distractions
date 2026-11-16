@@ -516,6 +516,47 @@ import GatekeeperCore
         XCTAssertEqual(model.interventions.count, 1)
     }
 
+    func testDesktopChangeRecallsKnownViewPastOldTwoMinuteCacheWithoutAI() async {
+        model.sessionMinutes = 10
+        trackedWindow = ScreenWindowContext(windowID: 10, processID: 77)
+        client.reply = offTask()
+        await start()
+        model.returnToWork(displayID: 1)
+        clock.now += 150
+        model.contextChanged(.spaceChange)
+        await model.cachedCheckTask?.value
+        XCTAssertEqual(model.interventions.count, 1)
+        XCTAssertEqual(client.requests, 1)
+        XCTAssertEqual(model.policy.pendingTrigger, .spaceChange)
+    }
+
+    func testSpaceAndWindowNotificationBurstOnlyInterruptsOnce() async {
+        client.holdResult = true; client.supportsInterrupt = true
+        let started = expectation(description: "Inference running")
+        client.onRequest = { started.fulfill() }
+        model.startSession(); await fulfillment(of: [started], timeout: 2)
+        let old = model.checkTask
+        model.contextChanged(.appSwitch)
+        model.contextChanged(.navigation)
+        model.contextChanged(.spaceChange)
+        await model.priorityInterruptTask?.value
+        await old?.value
+        XCTAssertEqual(client.interrupts, 1)
+        XCTAssertEqual(model.policy.pendingTrigger, .spaceChange)
+        XCTAssertNil(model.error)
+    }
+
+    func testNativeSpaceNotificationQueuesPriorityWork() async {
+        await start()
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: NSWorkspace.shared)
+        for _ in 0..<30 {
+            if model.policy.pendingTrigger == .spaceChange { break }
+            await Task.yield()
+        }
+        XCTAssertEqual(model.policy.pendingTrigger, .spaceChange)
+        XCTAssertEqual(client.requests, 1)
+    }
+
     private func offTask() -> Verdict {
         Verdict(status: "off_task", reason: "Unrelated feed", nextStep: "Return to work",
                 screens: [ScreenVerdict(screenIndex: 1, status: "off_task", reason: "Unrelated feed")])
